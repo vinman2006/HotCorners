@@ -33,7 +33,7 @@ namespace HotCornersDaemon
         private const int CORNER_H = 45;
 
         // Taskbar immunity width at bottom corners
-        private const int CORNER_SHIELD_W = 80;
+        private const int CORNER_SHIELD_W = 100;
 
         // Sensor barrier: Windows 11 taskbar wakes at Y >= H - 2. We swallow at Y >= H - 4 in corners.
         private const int SAFE_BOTTOM_OFFSET = 4;
@@ -93,6 +93,9 @@ namespace HotCornersDaemon
 
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int X, int Y);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
@@ -259,94 +262,107 @@ namespace HotCornersDaemon
         // =====================================================================
         private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEMOVE)
+            if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEMOVE && lParam != IntPtr.Zero)
             {
-                MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
-
-                // Ignore synthetic injected events
-                if ((hookStruct.flags & LLMHF_INJECTED) != 0)
+                try
                 {
-                    return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
-                }
+                    MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
 
-                int rawX = hookStruct.pt.X;
-                int rawY = hookStruct.pt.Y;
-
-                int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
-                int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
-
-                // -------------------------------------------------------------
-                // A. Re-Arming Hysteresis Checks (must travel 75px out of corner)
-                // -------------------------------------------------------------
-                if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
-                {
-                    _topLeftArmed = true;
-                }
-                if (!_bottomLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y < _screenH - CORNER_H - RESET_HYSTERESIS_PX))
-                {
-                    _bottomLeftArmed = true;
-                }
-                if (!_bottomRightArmed && (x < _screenW - CORNER_W - RESET_HYSTERESIS_PX || y < _screenH - CORNER_H - RESET_HYSTERESIS_PX))
-                {
-                    _bottomRightArmed = true;
-                }
-
-                // -------------------------------------------------------------
-                // B. TIGHT, INTENTIONAL HOT CORNER TRIGGERS (45x45 px)
-                // -------------------------------------------------------------
-                long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
-                bool cooldownElapsed = (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS;
-
-                // 1. Top-Left Corner (x <= 45 && y <= 45) -> Task View (Win + Tab)
-                if (x <= CORNER_W && y <= CORNER_H)
-                {
-                    if (_topLeftArmed && cooldownElapsed)
+                    // Ignore synthetic injected events
+                    if ((hookStruct.flags & LLMHF_INJECTED) != 0)
                     {
-                        _topLeftArmed = false;
-                        _lastTriggerTick = nowMs;
-                        Log(string.Format("Top-Left flick at ({0},{1}) -> Triggering Task View (Win+Tab)", x, y));
-                        TriggerWinTabAsync();
+                        return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
                     }
-                }
-                // 2. Bottom-Left Corner (x <= 45 && y >= H - 45) -> Desktop Left
-                else if (x <= CORNER_W && y >= _screenH - CORNER_H)
-                {
-                    if (_bottomLeftArmed && cooldownElapsed)
-                    {
-                        _bottomLeftArmed = false;
-                        _lastTriggerTick = nowMs;
-                        Log(string.Format("Bottom-Left flick at ({0},{1}) -> Triggering Slide Desktop Left", x, y));
-                        TriggerDesktopSwitchAsync(left: true);
-                    }
-                }
-                // 3. Bottom-Right Corner (x >= W - 45 && y >= H - 45) -> Desktop Right
-                else if (x >= _screenW - CORNER_W && y >= _screenH - CORNER_H)
-                {
-                    if (_bottomRightArmed && cooldownElapsed)
-                    {
-                        _bottomRightArmed = false;
-                        _lastTriggerTick = nowMs;
-                        Log(string.Format("Bottom-Right flick at ({0},{1}) -> Triggering Slide Desktop Right", x, y));
-                        TriggerDesktopSwitchAsync(left: false);
-                    }
-                }
 
-                // -------------------------------------------------------------
-                // C. CORNER TASKBAR IMMUNITY SHIELD
-                // -------------------------------------------------------------
-                // In the bottom corners (left 80px or right 80px):
-                // If cursor touches the bottom edge sensor line (rawY >= sensorY),
-                // swallow the event (return 1). Explorer never wakes taskbar at corners!
-                if ((rawX <= CORNER_SHIELD_W || rawX >= _screenW - CORNER_SHIELD_W) && rawY >= _sensorY)
-                {
-                    return (IntPtr)1; // Pure swallow: 0ms overhead, zero taskbar popup
-                }
+                    int rawX = hookStruct.pt.X;
+                    int rawY = hookStruct.pt.Y;
 
-                // -------------------------------------------------------------
-                // D. CENTER BOTTOM EDGE (80 < X < W - 80)
-                // -------------------------------------------------------------
-                // 100% untouched! All mouse movements pass directly to Windows.
-                // Reaches Y = H - 1 naturally, and auto-hide taskbar slides up instantly.
+                    int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
+                    int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
+
+                    // -------------------------------------------------------------
+                    // A. Re-Arming Hysteresis Checks (must travel 75px out of corner)
+                    // -------------------------------------------------------------
+                    if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
+                    {
+                        _topLeftArmed = true;
+                    }
+                    if (!_bottomLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y < _screenH - CORNER_H - RESET_HYSTERESIS_PX))
+                    {
+                        _bottomLeftArmed = true;
+                    }
+                    if (!_bottomRightArmed && (x < _screenW - CORNER_W - RESET_HYSTERESIS_PX || y < _screenH - CORNER_H - RESET_HYSTERESIS_PX))
+                    {
+                        _bottomRightArmed = true;
+                    }
+
+                    // -------------------------------------------------------------
+                    // B. TIGHT, INTENTIONAL HOT CORNER TRIGGERS (45x45 px)
+                    // -------------------------------------------------------------
+                    long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
+                    bool cooldownElapsed = (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS;
+
+                    // 1. Top-Left Corner (x <= 45 && y <= 45) -> Task View (Win + Tab)
+                    if (x <= CORNER_W && y <= CORNER_H)
+                    {
+                        if (_topLeftArmed && cooldownElapsed)
+                        {
+                            _topLeftArmed = false;
+                            _lastTriggerTick = nowMs;
+                            Log(string.Format("Top-Left flick at ({0},{1}) -> Triggering Task View (Win+Tab)", x, y));
+                            TriggerWinTabAsync();
+                        }
+                    }
+                    // 2. Bottom-Left Corner (x <= 45 && y >= H - 45) -> Desktop Left
+                    else if (x <= CORNER_W && y >= _screenH - CORNER_H)
+                    {
+                        if (_bottomLeftArmed && cooldownElapsed)
+                        {
+                            _bottomLeftArmed = false;
+                            _lastTriggerTick = nowMs;
+                            Log(string.Format("Bottom-Left flick at ({0},{1}) -> Triggering Slide Desktop Left", x, y));
+                            SetCursorPos(x, _screenH - 35);
+                            TriggerDesktopSwitchAsync(left: true);
+                            return (IntPtr)1;
+                        }
+                    }
+                    // 3. Bottom-Right Corner (x >= W - 45 && y >= H - 45) -> Desktop Right
+                    else if (x >= _screenW - CORNER_W && y >= _screenH - CORNER_H)
+                    {
+                        if (_bottomRightArmed && cooldownElapsed)
+                        {
+                            _bottomRightArmed = false;
+                            _lastTriggerTick = nowMs;
+                            Log(string.Format("Bottom-Right flick at ({0},{1}) -> Triggering Slide Desktop Right", x, y));
+                            SetCursorPos(x, _screenH - 35);
+                            TriggerDesktopSwitchAsync(left: false);
+                            return (IntPtr)1;
+                        }
+                    }
+
+                    // -------------------------------------------------------------
+                    // C. CORNER TASKBAR IMMUNITY SHIELD
+                    // -------------------------------------------------------------
+                    // In the bottom corners (left 100px or right 100px):
+                    // If cursor touches the bottom edge sensor line (rawY >= sensorY),
+                    // hold cursor 2px above sensor line (sensorY - 2) and swallow the event.
+                    // Explorer's auto-hide sensor (Y >= H - 2) NEVER wakes in the corners!
+                    if ((rawX <= CORNER_SHIELD_W || rawX >= _screenW - CORNER_SHIELD_W) && rawY >= _sensorY)
+                    {
+                        SetCursorPos(rawX, _sensorY - 2);
+                        return (IntPtr)1; // Pure swallow: 0ms overhead, zero taskbar popup
+                    }
+
+                    // -------------------------------------------------------------
+                    // D. CENTER BOTTOM EDGE (80 < X < W - 80)
+                    // -------------------------------------------------------------
+                    // 100% untouched! All mouse movements pass directly to Windows.
+                    // Reaches Y = H - 1 naturally, and auto-hide taskbar slides up instantly.
+                }
+                catch (Exception ex)
+                {
+                    Log("HookCallback error: " + ex.Message);
+                }
             }
 
             return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
