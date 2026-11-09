@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ Windows Hot Corners v3.0
+# ⚡ Windows Hot Corners v3.2
 
 ### macOS & GNOME style Hot Corners — natively engineered for Windows 11 & 10.
 ### Featuring Corner Taskbar Immunity & Unrestricted Center Auto-Hide.
@@ -8,8 +8,9 @@
 [![Windows 11 Ready](https://img.shields.io/badge/Windows%2011-24H2%20Compatible-0078D4?logo=windows11&logoColor=white)](https://github.com/vinman2006/HotCorners)
 [![Language](https://img.shields.io/badge/Language-C%23%20%7C%20Win32-239120?logo=csharp&logoColor=white)](https://github.com/vinman2006/HotCorners)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Native)-blueviolet)](#architecture)
-[![Memory Footprint](https://img.shields.io/badge/RAM-~11%20MB-success)](#performance)
+[![Memory Footprint](https://img.shields.io/badge/RAM-~20%20MB-success)](#performance)
 [![CPU Usage](https://img.shields.io/badge/CPU-0.0%25-brightgreen)](#performance)
+[![Deep Research](https://img.shields.io/badge/Research-Empirical%20Docs-informational)](RESEARCH.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <br/>
@@ -34,11 +35,11 @@
  │                                                                        │
  │ ↙️ BOTTOM-LEFT CORNER                             BOTTOM-RIGHT CORNER ↘️│
  │    Flick here ➔  Slide Desktop Left               Flick here ➔  Slide Desktop Right  │
- │    [CORNER IMMUNITY: 100% SHIELDED]               [CORNER IMMUNITY: 100% SHIELDED]   │
+ │    [CORNER IMMUNITY: 260px SHIELD]                [CORNER IMMUNITY: 260px SHIELD]    │
  └────────────────────────────[  TASKBAR  ]───────────────────────────────┘
                                    ▲
                                    │ (Taskbar slides up naturally and smoothly
-                                   │  whenever you move your mouse to the center edge;
+                                   │  whenever you move your mouse to the 1400px center edge;
                                    │  the left and right corners are 100% IMMUNE!)
 ```
 
@@ -46,17 +47,19 @@
 
 ## 💡 Why This Exists (The Problem & The Breakthrough)
 
-On macOS and Linux, Hot Corners are an indispensable muscle-memory productivity feature. Bringing this to Windows 11 has historically been a nightmare:
+On macOS and Linux, Hot Corners are an indispensable muscle-memory productivity feature. Bringing this to Windows 11 has historically been a nightmare due to taskbar and virtual desktop conflicts.
 
-| The Problem with Existing Tools | The HotCorners v3.0 Breakthrough |
+For complete reverse-engineering and empirical test logs, read our comprehensive [**Research Documentation (RESEARCH.md)**](RESEARCH.md).
+
+| The Problem with Existing Tools | The HotCorners v3.2 Breakthrough |
 | :--- | :--- |
-| **Windows 11 24H2 Keystroke Blocking:** Newer Windows updates intentionally block synthetic `Ctrl + Win + Left/Right` keystrokes injected by AutoHotkey and standard macro tools. | **Native Microsoft COM Virtual Desktop API:** Uses direct COM interfaces via Markus Scholtes' `VirtualDesktop.exe` to bypass keystroke filters cleanly. |
-| **Taskbar Popping at Corners:** When Auto-Hide taskbar is enabled, flicking into bottom corners triggers Windows' edge sensor (`Y >= H - 2`), popping up the taskbar over your desktop transitions. | **4-Layer Corner Taskbar Defense:** Dynamic kernel `ClipCursor` fence (`Y <= H - 4`) in corner bands, pure first-packet overshoot swallow (`return 1`), topmost non-activating corner shield windows, and post-switch taskbar clamping. The corners are **100% immune to taskbar popups**. |
-| **Center Taskbar Unresponsiveness:** Complex directional tracking can accidentally block intentional mouse moves in the center. | **Unrestricted Center Access:** The center bottom edge (`100 < X < W - 100`) immediately releases any fences and lets mouse input pass through untouched, allowing the auto-hide taskbar to unhide smoothly and instantly. |
-| **Accidental Switches Near Edges:** Large corner hitboxes trigger unintentional switches when clicking scrollbars, window controls, or taskbar icons. | **Tight Intentional Hitboxes (45×45 px):** Only deliberate, purposeful flicks into the extreme 45×45px physical corner fire. Includes 500ms debounce cooldown and 75px exit hysteresis so casual mouse movement never triggers accidental switches. |
-| **Heavy Background Bloat:** Many third-party utilities require Electron, large Python bundles, or run sluggish background polling loops. | **Pure Native Win32 Binary:** Compiles with Windows' built-in C# compiler (`csc.exe`). Consumes **0.0% CPU** and ~15 MB RAM. |
-| **Hook Timeouts & Stutter:** Calling APIs like `SetCursorPos` or disk I/O inside low-level hooks causes Windows to drop the hook. | **Zero-Latency Hook Pipeline:** Pure non-blocking execution with all COM calls, key events, and logging queued asynchronously to `ThreadPool`. Hook latency is `< 0.001ms`. |
-| **Ghost Triggers & Repeat Loops:** Resting your cursor in the corner can cause apps to repeatedly trigger or flicker. | **Hysteresis Exit Boundary:** Requires moving at least 75 pixels away from the corner and waiting 500ms before that corner can re-arm. |
+| **Windows 11 24H2 Keystroke Blocking:** Newer Windows updates intentionally block synthetic `Ctrl + Win + Left/Right` keystrokes injected by AutoHotkey and standard macro tools. | **Native Microsoft COM Virtual Desktop API:** Uses direct COM interfaces via Markus Scholtes' `VirtualDesktop.exe` with instantaneous switch execution. |
+| **Desktop Switch Banner Collision:** Switching virtual desktops in Windows 11 pops up an on-screen workspace name banner right over the bottom-center sensor, waking `Shell_TrayWnd` and locking it open for 5+ seconds. | **Switch Animation Suppression (`/Animation:0`):** Calling `VirtualDesktop.exe` with `/Animation:0` completely suppresses the banner, allowing seamless zero-stutter desktop sliding without waking the taskbar. |
+| **Diagonal Flick Sensor Wake:** Rapid diagonal swipes toward the corners hit the bottom edge at $X \approx 130\text{--}180\text{px}$, bypassing narrow shields and waking the taskbar at $Y \ge 1198$. | **Generous 260px Spatial Shield Wings:** $260\text{px}$ wide wings ($X \le 260$ and $X \ge 1660$) capture all diagonal trajectories early, holding the cursor safely at $Y = 1190$ ($8\text{px}$ above the $1198$ sensor) and swallowing all corner packets. |
+| **Center Taskbar Trapping ("Reverse Bug"):** Attempting to use global `ClipCursor` traps the cursor and blocks intentional mouse moves in the center. | **1400px Unrestricted Center Edge:** The center bottom region ($260 < X < 1660$) has zero hook interference. Mouse packets pass through with $0\,\mu\text{s}$ delay, allowing the auto-hide taskbar to unhide smoothly and immediately. |
+| **Rogue Focus Shifts During Transitions:** Desktop switching can occasionally cause Windows Explorer to steal foreground focus and slide up `Shell_TrayWnd`. | **Post-Switch Auto-Hide Enforcer:** A background verification thread monitors `Shell_TrayWnd` post-switch and clamps it back to $Y = 1198$ via `SetWindowPos(..., SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING)`. |
+| **Heavy Background Bloat:** Many third-party utilities require Electron, Python runtimes, or sluggish polling loops. | **Pure Native Win32 Binary:** Compiles with Windows' built-in C# compiler (`csc.exe`). Consumes **0.0% CPU** and ~20 MB RAM. |
+| **Ghost Triggers & Repeat Loops:** Resting your cursor in the corner can cause apps to repeatedly trigger or flicker. | **Hysteresis Exit Boundary:** Requires moving at least 75 pixels away from the corner and waiting 400ms before that corner can re-arm. |
 | **Audible Distractions:** Many scripts emit beep sounds on corner contact. | **100% Silent:** Zero sound beeps, zero chimes. |
 
 ---
@@ -89,7 +92,7 @@ That's it!
 | ↖️ | **Task View** | `Win + Tab` | Instant fluid overview of all running application windows. |
 | ↙️ | **Previous Desktop** | `Ctrl + Win + Left` | Workspace slides seamlessly to the virtual desktop on the left. Taskbar stays 100% hidden. |
 | ↘️ | **Next Desktop** | `Ctrl + Win + Right` | Workspace slides seamlessly to the virtual desktop on the right. Taskbar stays 100% hidden. |
-| ⬇️ *(Center)* | **Auto-Hide Taskbar** | Native Slide | Moves down to the center edge to reveal your taskbar smoothly and immediately. |
+| ⬇️ *(Center)* | **Auto-Hide Taskbar** | Native Slide | Moves down anywhere in the 1400px center edge to reveal your taskbar smoothly and immediately. |
 
 ---
 
@@ -98,48 +101,46 @@ That's it!
 ```mermaid
 flowchart TD
     subgraph Hardware ["Input Layer"]
-        Mouse["Physical Mouse / Precision Touchpad"]
+        Mouse["Physical Mouse / Precision Touchpad (1000 Hz / 144 Hz)"]
     end
 
     subgraph KernelHook ["Low-Level Hook Engine (WH_MOUSE_LL)"]
         HookProc["WM_MOUSEMOVE Interception (<0.001ms Latency)"]
-        DPI["Per-Monitor DPI Aware Coordinate Translation"]
+        DPI["Per-Monitor DPI Aware V2 Physical Coordinate Resolution"]
     end
 
-    subgraph Router ["Spatial Router & Defense Engine"]
-        CheckCorner{"In Corner Band (X <= 100 or X >= W - 100) & Y >= H - 80?"}
-        ClipFence["Arm Dynamic ClipCursor Fence (Y <= H - 4) & Swallow Overshoot"]
-        PassCenter["Release ClipCursor & Pass Through Unmodified ➔ Center Taskbar Unhides Smoothly"]
+    subgraph SpatialRouter ["Spatial Router (1920x1200 Display)"]
+        CheckCorner{"In Corner Wings?\n(X <= 260 or X >= 1660) & Y >= 1170?"}
+        SwallowAndClamp["Swallow Packet (return 1)\nClamp Cursor to Y = 1190 (8px above 1198 sensor)"]
+        PassCenter["Pass Straight to CallNextHookEx\nReaches Y = 1199 -> Center Taskbar Unhides Instantly"]
     end
 
     subgraph Dispatcher ["Action Dispatcher (ThreadPool Async)"]
-        TopLeft["↖ Top-Left (<= 45x45): Win+Tab (Task View)"]
-        BottomLeft["↙ Bottom-Left (<= 45x45): VirtualDesktop.exe /Left"]
-        BottomRight["↘ Bottom-Right (<= 45x45): VirtualDesktop.exe /Right"]
+        TopLeft["↖ Top-Left (<= 60x45): Win+Tab (Task View)"]
+        BottomLeft["↙ Bottom-Left (<= 60x45): VirtualDesktop.exe /Animation:0 /Left /Wrap"]
+        BottomRight["↘ Bottom-Right (<= 60x45): VirtualDesktop.exe /Animation:0 /Right /Wrap"]
+        PostClamp["Post-Switch Guard: Clamp Shell_TrayWnd to Top = 1198 via SetWindowPos"]
     end
 
     Mouse --> HookProc --> DPI --> CheckCorner
-    CheckCorner -- "Yes (Corner Approach)" --> ClipFence
-    CheckCorner -- "No (Center Edge)" --> PassCenter
-    DPI -- "Top-Left (x <= 45 & y <= 45)" --> TopLeft
-    DPI -- "Bottom-Left (x <= 45 & y >= h - 45)" --> BottomLeft
-    DPI -- "Bottom-Right (x >= w - 45 & y >= h - 45)" --> BottomRight
+    CheckCorner -- "Yes (Corner Wing)" --> SwallowAndClamp
+    CheckCorner -- "No (Center 1400px)" --> PassCenter
+    DPI -- "Top-Left (x <= 60 & y <= 45)" --> TopLeft
+    DPI -- "Bottom-Left (x <= 60 & y >= 1155)" --> BottomLeft --> PostClamp
+    DPI -- "Bottom-Right (x >= 1860 & y >= 1155)" --> BottomRight --> PostClamp
 ```
 
-1. **Tight 45×45 px Intentional Hitboxes:** Corner triggers are reduced to an exact 45×45 physical pixel footprint. Casual mouse navigation, selecting text, or clicking scrollbars never triggers desktop switching.
-2. **4-Layer Corner Taskbar Immunity:**
-   - **Layer A (Kernel Fence):** Pre-entry dynamic `ClipCursor` clamps bottom cursor bound to `H - 4` in corner columns (`X <= 100` and `X >= W - 100`), preventing cursor from ever touching the taskbar sensor line (`Y >= H - 2`).
-   - **Layer B (Pure Overshoot Swallow):** High-speed touchpad sweeps jumping beyond `H - 4` in one packet are swallowed directly without `SetCursorPos`.
-   - **Layer C (Topmost Invisible Shields):** Non-activating layered shield windows absorb secondary hit-tests.
-   - **Layer D (Post-Switch Clamping):** Shell tray is kept parked during virtual desktop transitions.
-3. **Unrestricted Center Taskbar:** As soon as the cursor moves into the center screen region (`100 < X < W - 100`), any active fence is released immediately, allowing your cursor to reach `Y = H - 1` naturally and slide the taskbar up without delay.
-4. **Non-blocking ThreadPool Dispatch:** Virtual desktop switching and logging execute asynchronously on background threads, ensuring the input hook finishes in under a microsecond without risking `LowLevelHooksTimeout`.
+1. **Tight 60×45 px Intentional Hitboxes:** Corner triggers are tuned for deliberate physical flicks. Casual mouse navigation, selecting text, or clicking scrollbars never triggers desktop switching.
+2. **260px Spatial Shield Wings:** Left wing ($X \le 260$) and right wing ($X \ge 1660$) capture all diagonal trajectories, clamping the cursor at $Y = 1190$ and swallowing packets so the hardware cursor never touches the $Y \ge 1198$ taskbar sensor.
+3. **Switch Animation Suppression:** Calls `VirtualDesktop.exe` with `/Animation:0 /Quiet /Left|Right /Wrap`, removing the Windows 11 desktop switch overlay that stole focus and forced `Shell_TrayWnd` to pop up.
+4. **Post-Switch Clamping:** Any rogue focus attempt is immediately corrected by `SetWindowPos(hTray, ..., SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING)`.
+5. **1400px Frictionless Center Taskbar:** Between $X = 260$ and $X = 1660$, mouse input passes through untouched with zero latency, unhiding the auto-hide taskbar naturally.
 
 ---
 
 ## 🛠️ Recompiling from Source
 
-Want to audit or modify the code? You can recompile [`HotCorners.cs`](HotCorners.cs) in under 2 seconds using the built-in Windows C# compiler—no SDK or Visual Studio required:
+You can recompile [`HotCorners.cs`](HotCorners.cs) in under 2 seconds using the built-in Windows C# compiler—no SDK or Visual Studio required:
 
 ```powershell
 & 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /target:winexe /optimize+ /out:'HotCorners.exe' 'HotCorners.cs'
@@ -152,14 +153,12 @@ Want to audit or modify the code? You can recompile [`HotCorners.cs`](HotCorners
 Open [`HotCorners.cs`](HotCorners.cs) in any text editor to adjust behavior:
 
 ```csharp
-private const int TOP_LEFT_WIDTH = 45;       // Top-left trigger width (px)
-private const int TOP_LEFT_HEIGHT = 45;      // Top-left trigger height (px)
-private const int BOTTOM_CORNER_WIDTH = 45;  // Bottom corner trigger width (px)
-private const int BOTTOM_CORNER_HEIGHT = 45; // Bottom corner trigger height (px)
-private const int CORNER_SHIELD_WIDTH = 100; // Taskbar immunity shield width
-private const int RESET_HYSTERESIS_PX = 75;  // Distance out of corner to re-arm
-private const long TRIGGER_COOLDOWN_MS = 500;// Debounce cooldown between triggers (ms)
-private const int SAFE_BOTTOM_OFFSET = 4;    // Safe ceiling: Y <= H - 4 (sensor is H - 2)
+private const int CORNER_W = 60;             // Corner trigger width (px)
+private const int CORNER_H = 45;             // Corner trigger height (px)
+private const int CORNER_SHIELD_W = 260;     // Taskbar immunity shield wing width (px)
+private const int CORNER_SHIELD_H = 30;      // Bottom approach shield height (px)
+private const int RESET_HYSTERESIS_PX = 75;  // Distance out of corner to re-arm (px)
+private const long TRIGGER_COOLDOWN_MS = 400;// Debounce cooldown between triggers (ms)
 ```
 
 ---
