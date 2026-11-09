@@ -17,14 +17,11 @@ namespace SmartHotCorners
         [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)] public static extern IntPtr GetModuleHandle(string mod);
         [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
-        [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr ProcessId);
         [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-        [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
-        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 
         public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -33,8 +30,6 @@ namespace SmartHotCorners
         const int KEYEVENTF_KEYUP = 0x0002;
         const byte VK_LWIN = 0x5B;
         const byte VK_TAB = 0x09;
-
-        public struct RECT { public int left, top, right, bottom; }
 
 #pragma warning disable 0649
         public struct POINT
@@ -58,15 +53,12 @@ namespace SmartHotCorners
         private static LowLevelMouseProc hookProc;
         private static string logPath;
         private static string virtualDesktopPath;
-        private static IntPtr trayHwnd;
 
         // State tracking
         private static bool inTopLeft = false;
         private static bool inBottomLeft = false;
         private static bool inBottomRight = false;
         private static long lastTriggerTime = 0;
-        private static int lastX = 960;
-        private static int lastY = 600;
 
         static void Main(string[] args)
         {
@@ -90,7 +82,7 @@ namespace SmartHotCorners
 
             try
             {
-                Log("Starting Smart Hot Corners (v2.1 Maximum Efficiency Shield Engine)...");
+                Log("Starting Smart Hot Corners (Corner-Immune Engine v3.0)...");
 
                 Thread worker = new Thread(() =>
                 {
@@ -100,20 +92,18 @@ namespace SmartHotCorners
                         bool deskSet = SetThreadDesktop(hDesk);
                         Log(string.Format("Worker thread desktop set: {0}", deskSet));
 
-                        trayHwnd = FindWindow("Shell_TrayWnd", null);
-
                         int w = GetSystemMetrics(0); // Screen width
                         int h = GetSystemMetrics(1); // Screen height
 
-                        const int CORNER_TRIGGER_W = 120; // 120px physical corner trigger width
-                        const int CORNER_TRIGGER_H = 100; // 100px physical corner trigger height
-                        const int SHIELD_WING_W = 420;    // 420px wide corner shield zone
-                        const int EXIT_DIST = 160;        // Distance to re-arm corner trigger
+                        const int CORNER_TRIGGER_W = 160; // 160px corner trigger width
+                        const int CORNER_TRIGGER_H = 100; // 100px corner trigger height
+                        const int CORNER_SHIELD_W = 250;  // 250px taskbar immunity zone in corners
+                        const int EXIT_DIST = 180;        // Distance to re-arm corner trigger
                         const int COOLDOWN_MS = 400;      // Milliseconds between switches
-                        int safeY = h - 25;                // Safe barrier: 25px above bottom edge (taskbar sensor at h - 2)
+                        int sensorY = h - 15;             // Safe barrier (blocks bottom 15px in corners)
 
-                        Log(string.Format("Metrics: {0}x{1}. Trigger Box: {2}x{3}px. Shield Wing: {4}px. Safe Barrier: Y={5}",
-                            w, h, CORNER_TRIGGER_W, CORNER_TRIGGER_H, SHIELD_WING_W, safeY));
+                        Log(string.Format("Metrics: {0}x{1}. Trigger Box: {2}x{3}px. Shield Wing: {4}px. Sensor Barrier: Y={5}",
+                            w, h, CORNER_TRIGGER_W, CORNER_TRIGGER_H, CORNER_SHIELD_W, sensorY));
 
                         hookProc = (nCode, wParam, lParam) =>
                         {
@@ -174,44 +164,17 @@ namespace SmartHotCorners
                                     inBottomRight = false;
                                 }
 
-                                // 4. ZERO-TASKBAR CORNER SHIELD & UP-TO-DOWN SENSOR GATE
-                                // Check if taskbar is currently hidden
-                                RECT rTray;
-                                GetWindowRect(trayHwnd, out rTray);
-                                bool taskbarVisible = (rTray.top < (h - 20));
-
-                                if (!taskbarVisible)
+                                // 4. CORNER TASKBAR IMMUNITY SHIELD:
+                                // In the bottom-left or bottom-right corners:
+                                // If the cursor tries to touch the bottom edge sensor line (curY >= sensorY),
+                                // SWALLOW the raw event directly. The taskbar NEVER receives mouse input in corners!
+                                if ((curX <= CORNER_SHIELD_W || curX >= (w - CORNER_SHIELD_W)) && curY >= sensorY)
                                 {
-                                    // A. CORNER WINGS (Left 420px or Right 420px):
-                                    // 100% SHIELDED. Taskbar NEVER receives mouse input in corners.
-                                    if (curX <= SHIELD_WING_W || curX >= (w - SHIELD_WING_W))
-                                    {
-                                        if (curY >= safeY)
-                                        {
-                                            SetCursorPos(curX, safeY);
-                                            lastX = curX;
-                                            lastY = safeY;
-                                            return (IntPtr)1; // Swallow event
-                                        }
-                                    }
-                                    // B. CENTER ZONE (Between 420px and W - 420px):
-                                    // ONLY allow unhiding if moving UP-to-DOWN from above
-                                    else
-                                    {
-                                        bool isMovingDownFromAbove = (curY > lastY && lastY < (h - 40));
-                                        // If sweeping horizontally along the bottom without moving down from above:
-                                        if (!isMovingDownFromAbove && curY >= safeY)
-                                        {
-                                            SetCursorPos(curX, safeY);
-                                            lastX = curX;
-                                            lastY = safeY;
-                                            return (IntPtr)1;
-                                        }
-                                    }
+                                    return (IntPtr)1; // Pure swallow: 0ms latency, zero driver fight
                                 }
 
-                                lastX = curX;
-                                lastY = curY;
+                                // 5. CENTER ZONE: COMPLETELY UNTOUCHED!
+                                // Moving mouse to the bottom in the center unhides the taskbar immediately and normally.
                             }
 
                             return CallNextHookEx(hookId, nCode, wParam, lParam);
@@ -305,16 +268,19 @@ namespace SmartHotCorners
 
         private static void Log(string message)
         {
-            try
+            ThreadPool.QueueUserWorkItem((state) =>
             {
-                string line = string.Format("[{0:yyyy-MM-dd HH:mm:ss}] {1}", DateTime.Now, message);
-                Console.WriteLine(line);
-                if (!string.IsNullOrEmpty(logPath))
+                try
                 {
-                    File.AppendAllText(logPath, line + Environment.NewLine);
+                    string line = string.Format("[{0:yyyy-MM-dd HH:mm:ss}] {1}", DateTime.Now, message);
+                    Console.WriteLine(line);
+                    if (!string.IsNullOrEmpty(logPath))
+                    {
+                        File.AppendAllText(logPath, line + Environment.NewLine);
+                    }
                 }
-            }
-            catch { }
+                catch { }
+            });
         }
     }
 }
