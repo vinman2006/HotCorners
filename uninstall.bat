@@ -1,0 +1,7 @@
+@echo off
+title Smart Hot Corners Uninstaller
+cd /d "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall.ps1" -DeleteFiles
+echo.
+pause
+

@@ -1,0 +1,11 @@
+# Logs
+*.log
+HotCorners.log
+
+# Temporary / Build files
+*.tmp
+*.pdb
+*.obj
+.vs/
+bin/
+obj/
