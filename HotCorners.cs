@@ -270,11 +270,45 @@ namespace HotCornersDaemon
         // =====================================================================
         // 4. ENTRY POINT
         // =====================================================================
+        private static string _logPath;
+        internal static void Log(string message)
+        {
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(_logPath))
+                    {
+                        _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HotCorners.log");
+                    }
+                    string line = string.Format("[{0:yyyy-MM-dd HH:mm:ss}] {1}\r\n", DateTime.Now, message);
+                    File.AppendAllText(_logPath, line);
+                }
+                catch { }
+            });
+        }
+
         [STAThread]
         private static void Main(string[] args)
         {
+            _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HotCorners.log");
+            Log("=================================================");
+            Log("HotCorners Daemon starting up (Taskbar-Immune v3.1)");
+
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                Log("FATAL UNHANDLED EXCEPTION: " + (e.ExceptionObject != null ? e.ExceptionObject.ToString() : "null"));
+            };
+
+            Application.ThreadException += (s, e) =>
+            {
+                Log("THREAD EXCEPTION: " + (e.Exception != null ? e.Exception.ToString() : "null"));
+            };
+
             EnablePhysicalDpiAwareness();
             UpdateScreenMetrics();
+            Log(string.Format("Physical Screen: {0}x{1}. Safe Bottom Y: {2}. Triggers: {3}x{4}px.",
+                _screenW, _screenH, _safeBottomY, BOTTOM_CORNER_WIDTH, BOTTOM_CORNER_HEIGHT));
 
             if (args != null && args.Length > 0 &&
                 (string.Equals(args[0], "--verify", StringComparison.OrdinalIgnoreCase) ||
@@ -289,6 +323,7 @@ namespace HotCornersDaemon
             {
                 if (!createdNew)
                 {
+                    Log("Another instance is already running (Mutex locked). Exiting.");
                     return;
                 }
 
@@ -296,10 +331,19 @@ namespace HotCornersDaemon
                 Application.SetCompatibleTextRenderingDefault(false);
 
                 ResolveVirtualDesktopExePath();
+                Log("Resolved VirtualDesktop path: " + _VirtualDesktopExePath);
 
                 // Create Topmost Corner Shields
-                _LeftShield = new CornerShieldWindow(0, _screenH - 6, CORNER_SHIELD_WIDTH, 6);
-                _RightShield = new CornerShieldWindow(_screenW - CORNER_SHIELD_WIDTH, _screenH - 6, CORNER_SHIELD_WIDTH, 6);
+                try
+                {
+                    _LeftShield = new CornerShieldWindow(0, _screenH - 6, CORNER_SHIELD_WIDTH, 6);
+                    _RightShield = new CornerShieldWindow(_screenW - CORNER_SHIELD_WIDTH, _screenH - 6, CORNER_SHIELD_WIDTH, 6);
+                    Log("Corner shield windows successfully created.");
+                }
+                catch (Exception ex)
+                {
+                    Log("Warning: Could not create shield windows: " + ex.Message);
+                }
 
                 // Background action dispatcher thread
                 Thread workerThread = new Thread(ActionWorkerLoop)
@@ -309,6 +353,7 @@ namespace HotCornersDaemon
                     Priority = ThreadPriority.AboveNormal
                 };
                 workerThread.Start();
+                Log("Background action worker thread started.");
 
                 // Install Low-Level Mouse Hook
                 Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
@@ -321,10 +366,26 @@ namespace HotCornersDaemon
                     _mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, _mouseHookDelegate, GetModuleHandle(curModule.ModuleName), 0);
                 }
 
+                Log(string.Format("Low-level mouse hook installed: {0} (Handle: 0x{1:X})",
+                    _mouseHookHandle != IntPtr.Zero, _mouseHookHandle.ToInt64()));
+
                 InitializeTrayIcon();
 
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += (s, e) =>
+                {
+                    UpdateScreenMetrics();
+                    Log(string.Format("Display resolution changed -> Updated to {0}x{1}", _screenW, _screenH));
+                };
+
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged += (s, e) =>
+                {
+                    UpdateScreenMetrics();
+                };
+
                 Application.ApplicationExit += OnApplicationExit;
-                Application.Run(new SystemEventListenerWindow());
+                Log("Entering WinForms message loop (Application.Run)...");
+                Application.Run();
+                Log("Exited WinForms message loop.");
             }
         }
 
@@ -543,6 +604,7 @@ namespace HotCornersDaemon
 
                 try
                 {
+                    Log(string.Format("Executing Corner Action {0} ({1})", action, action == 1 ? "Top-Left Task View" : (action == 2 ? "Bottom-Left Slide Left" : "Bottom-Right Slide Right")));
                     if (action == 1)
                     {
                         SendWinTab();
@@ -748,39 +810,8 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 8. SYSTEM EVENT LISTENER & CLEANUP
+        // 8. SYSTEM TRAY ICON & CLEANUP
         // =====================================================================
-        private sealed class SystemEventListenerWindow : Form
-        {
-            public SystemEventListenerWindow()
-            {
-                ShowInTaskbar = false;
-                FormBorderStyle = FormBorderStyle.None;
-                WindowState = FormWindowState.Minimized;
-                Opacity = 0;
-            }
-
-            protected override void SetVisibleCore(bool value)
-            {
-                base.SetVisibleCore(false);
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                if (m.Msg == WM_DISPLAYCHANGE || m.Msg == WM_SETTINGCHANGE)
-                {
-                    UpdateScreenMetrics();
-                }
-                else if (m.Msg == WM_ACTIVATEAPP)
-                {
-                    if (!_isClipFenceActive)
-                    {
-                        ClipCursor(IntPtr.Zero);
-                    }
-                }
-                base.WndProc(ref m);
-            }
-        }
 
         private static void InitializeTrayIcon()
         {
