@@ -29,18 +29,20 @@ namespace HotCornersDaemon
         // 1. CONFIGURATION CONSTANTS (Physical Pixels on 1920x1200)
         // =====================================================================
         // Compact corner trigger zones: Deliberate flicks only
-        private const int CORNER_W = 45;
+        private const int CORNER_W = 60;
         private const int CORNER_H = 45;
 
         // Taskbar immunity zone at bottom corners (width and height)
-        private const int CORNER_SHIELD_W = 120;
+        // 260px wide protects the entire corner flick approach zone on 1920px display
+        // while leaving a massive 1400px wide center strip (260 < X < 1660) 100% natural.
+        private const int CORNER_SHIELD_W = 260;
         private const int CORNER_SHIELD_H = 30; // Protects bottom 30px in corners (Y >= H - 30)
 
         // Re-arm hysteresis: Cursor must travel 75px out of the corner before re-arming
         private const int RESET_HYSTERESIS_PX = 75;
 
         // Debounce cooldown (ms) between consecutive triggers
-        private const long TRIGGER_COOLDOWN_MS = 500;
+        private const long TRIGGER_COOLDOWN_MS = 400;
 
         // =====================================================================
         // 2. WIN32 API DECLARATIONS
@@ -94,6 +96,23 @@ namespace HotCornersDaemon
 
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
+
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_NOSENDCHANGING = 0x0400;
+        private const uint SWP_NOZORDER = 0x0004;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
@@ -311,13 +330,13 @@ namespace HotCornersDaemon
                     }
 
                     // 2. Bottom Corners: Taskbar Immunity & Virtual Desktop Switching
-                    // Left Wing: X <= 120 | Right Wing: X >= W - 120
+                    // Left Wing: X <= 260 | Right Wing: X >= W - 260
                     bool inLeftCornerWing = (rawX <= CORNER_SHIELD_W);
                     bool inRightCornerWing = (rawX >= _screenW - CORNER_SHIELD_W);
 
                     if ((inLeftCornerWing || inRightCornerWing) && rawY >= (_screenH - CORNER_SHIELD_H))
                     {
-                        // Check for deliberate corner flick trigger (45x45 px)
+                        // Check for deliberate corner flick trigger (60x45 px)
                         if (inLeftCornerWing && x <= CORNER_W && y >= _screenH - CORNER_H)
                         {
                             if (_bottomLeftArmed && cooldownElapsed)
@@ -340,18 +359,18 @@ namespace HotCornersDaemon
                         }
 
                         // CORNER TASKBAR IMMUNITY GUARANTEE:
-                        // ALWAYS hold cursor safely above the taskbar sensor (clamp to H - 25)
+                        // ALWAYS hold cursor safely above the taskbar sensor (clamp to H - 10 = 1190)
                         // and ALWAYS swallow the packet (return 1).
                         // Windows Explorer NEVER receives a single event at the bottom corners!
-                        if (rawY > _screenH - 25)
+                        if (rawY > _screenH - 10)
                         {
-                            SetCursorPos(rawX, _screenH - 25);
+                            SetCursorPos(rawX, _screenH - 10);
                         }
                         return (IntPtr)1;
                     }
 
                     // -------------------------------------------------------------
-                    // C. CENTER BOTTOM EDGE (120 < X < W - 120):
+                    // C. CENTER BOTTOM EDGE (260 < X < W - 260):
                     // -------------------------------------------------------------
                     // 100% untouched! Passes straight to Windows without modification.
                     // Cursor reaches Y = H - 1 naturally, and auto-hide taskbar unhides smoothly.
@@ -407,14 +426,14 @@ namespace HotCornersDaemon
                         ProcessStartInfo psi = new ProcessStartInfo
                         {
                             FileName = _VirtualDesktopExePath,
-                            Arguments = left ? "/Quiet /Left /Wrap" : "/Quiet /Right /Wrap",
+                            Arguments = left ? "/Animation:0 /Quiet /Left /Wrap" : "/Animation:0 /Quiet /Right /Wrap",
                             CreateNoWindow = true,
                             UseShellExecute = false,
                             WindowStyle = ProcessWindowStyle.Hidden
                         };
                         using (Process proc = Process.Start(psi))
                         {
-                            if (proc != null) proc.WaitForExit(350);
+                            if (proc != null) proc.WaitForExit(400);
                         }
                     }
                     else
@@ -427,6 +446,17 @@ namespace HotCornersDaemon
                         keybd_event(arrowVk, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
                         keybd_event(VK_LWIN, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
                         keybd_event(VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                    }
+
+                    // Enforce taskbar auto-hide clamp post-switch (ironclad defense against rogue focus shifts)
+                    IntPtr hTray = FindWindow("Shell_TrayWnd", null);
+                    if (hTray != IntPtr.Zero)
+                    {
+                        RECT r;
+                        if (GetWindowRect(hTray, out r) && r.Top < _screenH - 10)
+                        {
+                            SetWindowPos(hTray, IntPtr.Zero, 0, _screenH - 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+                        }
                     }
                 }
                 catch (Exception ex)
