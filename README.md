@@ -51,11 +51,12 @@ On macOS and Linux, Hot Corners are an indispensable muscle-memory productivity 
 | The Problem with Existing Tools | The HotCorners v3.0 Breakthrough |
 | :--- | :--- |
 | **Windows 11 24H2 Keystroke Blocking:** Newer Windows updates intentionally block synthetic `Ctrl + Win + Left/Right` keystrokes injected by AutoHotkey and standard macro tools. | **Native Microsoft COM Virtual Desktop API:** Uses direct COM interfaces via Markus Scholtes' `VirtualDesktop.exe` to bypass keystroke filters cleanly. |
-| **Taskbar Popping at Corners:** When Auto-Hide taskbar is enabled, flicking into bottom corners triggers Windows' edge sensor (`Y >= H - 2`), popping up the taskbar over your desktop transitions. | **Corner Taskbar Immunity:** Pure low-level driver event swallowing (`return 1`) at `Y >= H - 15` in the bottom corners. Windows Explorer **never receives mouse input in the corners**, making them 100% immune to the taskbar. |
-| **Center Taskbar Unresponsiveness:** Complex directional tracking can accidentally block intentional mouse moves in the center. | **Unrestricted Center Access:** The center zone is completely untouched by the hook. Moving your cursor down to the center edge unhides the auto-hide taskbar instantly and naturally. |
-| **Heavy Background Bloat:** Many third-party utilities require Electron, large Python bundles, or run sluggish background polling loops. | **Pure Native 11 KB Win32 Binary:** Compiles with Windows' built-in C# compiler (`csc.exe`). Consumes **0.0% CPU** and ~11 MB RAM. |
+| **Taskbar Popping at Corners:** When Auto-Hide taskbar is enabled, flicking into bottom corners triggers Windows' edge sensor (`Y >= H - 2`), popping up the taskbar over your desktop transitions. | **4-Layer Corner Taskbar Defense:** Dynamic kernel `ClipCursor` fence (`Y <= H - 4`) in corner bands, pure first-packet overshoot swallow (`return 1`), topmost non-activating corner shield windows, and post-switch taskbar clamping. The corners are **100% immune to taskbar popups**. |
+| **Center Taskbar Unresponsiveness:** Complex directional tracking can accidentally block intentional mouse moves in the center. | **Unrestricted Center Access:** The center bottom edge (`100 < X < W - 100`) immediately releases any fences and lets mouse input pass through untouched, allowing the auto-hide taskbar to unhide smoothly and instantly. |
+| **Accidental Switches Near Edges:** Large corner hitboxes trigger unintentional switches when clicking scrollbars, window controls, or taskbar icons. | **Tight Intentional Hitboxes (45×45 px):** Only deliberate, purposeful flicks into the extreme 45×45px physical corner fire. Includes 500ms debounce cooldown and 75px exit hysteresis so casual mouse movement never triggers accidental switches. |
+| **Heavy Background Bloat:** Many third-party utilities require Electron, large Python bundles, or run sluggish background polling loops. | **Pure Native Win32 Binary:** Compiles with Windows' built-in C# compiler (`csc.exe`). Consumes **0.0% CPU** and ~15 MB RAM. |
 | **Hook Timeouts & Stutter:** Calling APIs like `SetCursorPos` or disk I/O inside low-level hooks causes Windows to drop the hook. | **Zero-Latency Hook Pipeline:** Pure non-blocking execution with all COM calls, key events, and logging queued asynchronously to `ThreadPool`. Hook latency is `< 0.001ms`. |
-| **Ghost Triggers & Repeat Loops:** Resting your cursor in the corner can cause apps to repeatedly trigger or flicker. | **Hysteresis Exit Boundary:** Requires moving at least 180 pixels away from the corner and a 400ms cooldown before that corner can re-arm. |
+| **Ghost Triggers & Repeat Loops:** Resting your cursor in the corner can cause apps to repeatedly trigger or flicker. | **Hysteresis Exit Boundary:** Requires moving at least 75 pixels away from the corner and waiting 500ms before that corner can re-arm. |
 | **Audible Distractions:** Many scripts emit beep sounds on corner contact. | **100% Silent:** Zero sound beeps, zero chimes. |
 
 ---
@@ -105,29 +106,34 @@ flowchart TD
         DPI["Per-Monitor DPI Aware Coordinate Translation"]
     end
 
-    subgraph Router ["Spatial Router"]
-        CheckCorner{"In Bottom Corners & Y >= H - 15?"}
-        Swallow["Swallow Event (return 1) ➔ Corner Taskbar Immunity"]
-        PassCenter["Pass Through (CallNextHookEx) ➔ Center Taskbar Works Normally"]
+    subgraph Router ["Spatial Router & Defense Engine"]
+        CheckCorner{"In Corner Band (X <= 100 or X >= W - 100) & Y >= H - 80?"}
+        ClipFence["Arm Dynamic ClipCursor Fence (Y <= H - 4) & Swallow Overshoot"]
+        PassCenter["Release ClipCursor & Pass Through Unmodified ➔ Center Taskbar Unhides Smoothly"]
     end
 
-    subgraph Dispatcher ["Action Dispatcher (ThreadPool)"]
-        TopLeft["↖ Top-Left: Win+Tab (Task View)"]
-        BottomLeft["↙ Bottom-Left: VirtualDesktop.exe /Left /Wrap"]
-        BottomRight["↘ Bottom-Right: VirtualDesktop.exe /Right /Wrap"]
+    subgraph Dispatcher ["Action Dispatcher (ThreadPool Async)"]
+        TopLeft["↖ Top-Left (<= 45x45): Win+Tab (Task View)"]
+        BottomLeft["↙ Bottom-Left (<= 45x45): VirtualDesktop.exe /Left"]
+        BottomRight["↘ Bottom-Right (<= 45x45): VirtualDesktop.exe /Right"]
     end
 
     Mouse --> HookProc --> DPI --> CheckCorner
-    CheckCorner -- "Yes (Corner Bottom Edge)" --> Swallow
-    CheckCorner -- "No (Center / Moving Away)" --> PassCenter
-    DPI -- "Top-Left (x <= 160 & y <= 100)" --> TopLeft
-    DPI -- "Bottom-Left (x <= 160 & y >= h - 100)" --> BottomLeft
-    DPI -- "Bottom-Right (x >= w - 160 & y >= h - 100)" --> BottomRight
+    CheckCorner -- "Yes (Corner Approach)" --> ClipFence
+    CheckCorner -- "No (Center Edge)" --> PassCenter
+    DPI -- "Top-Left (x <= 45 & y <= 45)" --> TopLeft
+    DPI -- "Bottom-Left (x <= 45 & y >= h - 45)" --> BottomLeft
+    DPI -- "Bottom-Right (x >= w - 45 & y >= h - 45)" --> BottomRight
 ```
 
-1. **Corner Taskbar Immunity:** In the bottom-left and bottom-right corners, raw mouse move events attempting to touch the bottom edge sensor line (`Y >= H - 15`) are swallowed directly (`return 1`). Windows Explorer never receives edge hover notifications in the corners.
-2. **Unrestricted Center Taskbar:** The center screen edge is completely unblocked. Moving your mouse to the center bottom edge reaches `Y = H - 1` naturally, unhiding the taskbar smoothly and immediately.
-3. **Non-blocking ThreadPool Dispatch:** Virtual desktop switching and logging execute asynchronously on background threads, ensuring the input hook finishes in under a microsecond without risking `LowLevelHooksTimeout`.
+1. **Tight 45×45 px Intentional Hitboxes:** Corner triggers are reduced to an exact 45×45 physical pixel footprint. Casual mouse navigation, selecting text, or clicking scrollbars never triggers desktop switching.
+2. **4-Layer Corner Taskbar Immunity:**
+   - **Layer A (Kernel Fence):** Pre-entry dynamic `ClipCursor` clamps bottom cursor bound to `H - 4` in corner columns (`X <= 100` and `X >= W - 100`), preventing cursor from ever touching the taskbar sensor line (`Y >= H - 2`).
+   - **Layer B (Pure Overshoot Swallow):** High-speed touchpad sweeps jumping beyond `H - 4` in one packet are swallowed directly without `SetCursorPos`.
+   - **Layer C (Topmost Invisible Shields):** Non-activating layered shield windows absorb secondary hit-tests.
+   - **Layer D (Post-Switch Clamping):** Shell tray is kept parked during virtual desktop transitions.
+3. **Unrestricted Center Taskbar:** As soon as the cursor moves into the center screen region (`100 < X < W - 100`), any active fence is released immediately, allowing your cursor to reach `Y = H - 1` naturally and slide the taskbar up without delay.
+4. **Non-blocking ThreadPool Dispatch:** Virtual desktop switching and logging execute asynchronously on background threads, ensuring the input hook finishes in under a microsecond without risking `LowLevelHooksTimeout`.
 
 ---
 
@@ -146,12 +152,14 @@ Want to audit or modify the code? You can recompile [`HotCorners.cs`](HotCorners
 Open [`HotCorners.cs`](HotCorners.cs) in any text editor to adjust behavior:
 
 ```csharp
-const int CORNER_TRIGGER_W = 160; // Corner trigger width in physical pixels
-const int CORNER_TRIGGER_H = 100; // Corner trigger height in physical pixels
-const int CORNER_SHIELD_W = 250;  // Taskbar immunity width in corners
-const int EXIT_DIST = 180;        // Distance to re-arm corner trigger
-const int COOLDOWN_MS = 400;      // Minimum debounce delay between triggers
-int sensorY = h - 15;             // Safe barrier (blocks bottom 15px in corners)
+private const int TOP_LEFT_WIDTH = 45;       // Top-left trigger width (px)
+private const int TOP_LEFT_HEIGHT = 45;      // Top-left trigger height (px)
+private const int BOTTOM_CORNER_WIDTH = 45;  // Bottom corner trigger width (px)
+private const int BOTTOM_CORNER_HEIGHT = 45; // Bottom corner trigger height (px)
+private const int CORNER_SHIELD_WIDTH = 100; // Taskbar immunity shield width
+private const int RESET_HYSTERESIS_PX = 75;  // Distance out of corner to re-arm
+private const long TRIGGER_COOLDOWN_MS = 500;// Debounce cooldown between triggers (ms)
+private const int SAFE_BOTTOM_OFFSET = 4;    // Safe ceiling: Y <= H - 4 (sensor is H - 2)
 ```
 
 ---
