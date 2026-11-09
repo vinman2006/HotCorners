@@ -32,11 +32,9 @@ namespace HotCornersDaemon
         private const int CORNER_W = 45;
         private const int CORNER_H = 45;
 
-        // Taskbar immunity width at bottom corners
-        private const int CORNER_SHIELD_W = 100;
-
-        // Sensor barrier: Windows 11 taskbar wakes at Y >= H - 2. We swallow at Y >= H - 4 in corners.
-        private const int SAFE_BOTTOM_OFFSET = 4;
+        // Taskbar immunity zone at bottom corners (width and height)
+        private const int CORNER_SHIELD_W = 120;
+        private const int CORNER_SHIELD_H = 30; // Protects bottom 30px in corners (Y >= H - 30)
 
         // Re-arm hysteresis: Cursor must travel 75px out of the corner before re-arming
         private const int RESET_HYSTERESIS_PX = 75;
@@ -122,7 +120,6 @@ namespace HotCornersDaemon
 
         private static int _screenW;
         private static int _screenH;
-        private static int _sensorY; // _screenH - SAFE_BOTTOM_OFFSET
 
         private static bool _topLeftArmed = true;
         private static bool _bottomLeftArmed = true;
@@ -156,8 +153,8 @@ namespace HotCornersDaemon
 
             EnablePhysicalDpiAwareness();
             UpdateScreenMetrics();
-            Log(string.Format("Screen Metrics: {0}x{1}. Sensor Barrier: Y >= {2}. Hitbox: {3}x{4}px. Corner Shield: {5}px.",
-                _screenW, _screenH, _sensorY, CORNER_W, CORNER_H, CORNER_SHIELD_W));
+            Log(string.Format("Screen Metrics: {0}x{1}. Hitbox: {2}x{3}px. Corner Shield: {4}x{5}px.",
+                _screenW, _screenH, CORNER_W, CORNER_H, CORNER_SHIELD_W, CORNER_SHIELD_H));
 
             bool createdNew;
             using (Mutex singleInstanceMutex = new Mutex(true, @"Local\Win11HotCornersDaemon_v3", out createdNew))
@@ -227,7 +224,6 @@ namespace HotCornersDaemon
         {
             _screenW = GetSystemMetrics(SM_CXSCREEN);
             _screenH = GetSystemMetrics(SM_CYSCREEN);
-            _sensorY = _screenH - SAFE_BOTTOM_OFFSET; // 1196 on 1920x1200
         }
 
         private static void ResolveVirtualDesktopExePath()
@@ -297,7 +293,7 @@ namespace HotCornersDaemon
                     }
 
                     // -------------------------------------------------------------
-                    // B. TIGHT, INTENTIONAL HOT CORNER TRIGGERS (45x45 px)
+                    // B. TIGHT, INTENTIONAL HOT CORNER TRIGGERS & CORNER TASKBAR IMMUNITY
                     // -------------------------------------------------------------
                     long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
                     bool cooldownElapsed = (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS;
@@ -313,51 +309,52 @@ namespace HotCornersDaemon
                             TriggerWinTabAsync();
                         }
                     }
-                    // 2. Bottom-Left Corner (x <= 45 && y >= H - 45) -> Desktop Left
-                    else if (x <= CORNER_W && y >= _screenH - CORNER_H)
+
+                    // 2. Bottom Corners: Taskbar Immunity & Virtual Desktop Switching
+                    // Left Wing: X <= 120 | Right Wing: X >= W - 120
+                    bool inLeftCornerWing = (rawX <= CORNER_SHIELD_W);
+                    bool inRightCornerWing = (rawX >= _screenW - CORNER_SHIELD_W);
+
+                    if ((inLeftCornerWing || inRightCornerWing) && rawY >= (_screenH - CORNER_SHIELD_H))
                     {
-                        if (_bottomLeftArmed && cooldownElapsed)
+                        // Check for deliberate corner flick trigger (45x45 px)
+                        if (inLeftCornerWing && x <= CORNER_W && y >= _screenH - CORNER_H)
                         {
-                            _bottomLeftArmed = false;
-                            _lastTriggerTick = nowMs;
-                            Log(string.Format("Bottom-Left flick at ({0},{1}) -> Triggering Slide Desktop Left", x, y));
-                            SetCursorPos(x, _screenH - 35);
-                            TriggerDesktopSwitchAsync(left: true);
-                            return (IntPtr)1;
+                            if (_bottomLeftArmed && cooldownElapsed)
+                            {
+                                _bottomLeftArmed = false;
+                                _lastTriggerTick = nowMs;
+                                Log(string.Format("Bottom-Left flick at ({0},{1}) -> Triggering Slide Desktop Left", x, y));
+                                TriggerDesktopSwitchAsync(left: true);
+                            }
                         }
-                    }
-                    // 3. Bottom-Right Corner (x >= W - 45 && y >= H - 45) -> Desktop Right
-                    else if (x >= _screenW - CORNER_W && y >= _screenH - CORNER_H)
-                    {
-                        if (_bottomRightArmed && cooldownElapsed)
+                        else if (inRightCornerWing && x >= _screenW - CORNER_W && y >= _screenH - CORNER_H)
                         {
-                            _bottomRightArmed = false;
-                            _lastTriggerTick = nowMs;
-                            Log(string.Format("Bottom-Right flick at ({0},{1}) -> Triggering Slide Desktop Right", x, y));
-                            SetCursorPos(x, _screenH - 35);
-                            TriggerDesktopSwitchAsync(left: false);
-                            return (IntPtr)1;
+                            if (_bottomRightArmed && cooldownElapsed)
+                            {
+                                _bottomRightArmed = false;
+                                _lastTriggerTick = nowMs;
+                                Log(string.Format("Bottom-Right flick at ({0},{1}) -> Triggering Slide Desktop Right", x, y));
+                                TriggerDesktopSwitchAsync(left: false);
+                            }
                         }
+
+                        // CORNER TASKBAR IMMUNITY GUARANTEE:
+                        // ALWAYS hold cursor safely above the taskbar sensor (clamp to H - 25)
+                        // and ALWAYS swallow the packet (return 1).
+                        // Windows Explorer NEVER receives a single event at the bottom corners!
+                        if (rawY > _screenH - 25)
+                        {
+                            SetCursorPos(rawX, _screenH - 25);
+                        }
+                        return (IntPtr)1;
                     }
 
                     // -------------------------------------------------------------
-                    // C. CORNER TASKBAR IMMUNITY SHIELD
+                    // C. CENTER BOTTOM EDGE (120 < X < W - 120):
                     // -------------------------------------------------------------
-                    // In the bottom corners (left 100px or right 100px):
-                    // If cursor touches the bottom edge sensor line (rawY >= sensorY),
-                    // hold cursor 2px above sensor line (sensorY - 2) and swallow the event.
-                    // Explorer's auto-hide sensor (Y >= H - 2) NEVER wakes in the corners!
-                    if ((rawX <= CORNER_SHIELD_W || rawX >= _screenW - CORNER_SHIELD_W) && rawY >= _sensorY)
-                    {
-                        SetCursorPos(rawX, _sensorY - 2);
-                        return (IntPtr)1; // Pure swallow: 0ms overhead, zero taskbar popup
-                    }
-
-                    // -------------------------------------------------------------
-                    // D. CENTER BOTTOM EDGE (80 < X < W - 80)
-                    // -------------------------------------------------------------
-                    // 100% untouched! All mouse movements pass directly to Windows.
-                    // Reaches Y = H - 1 naturally, and auto-hide taskbar slides up instantly.
+                    // 100% untouched! Passes straight to Windows without modification.
+                    // Cursor reaches Y = H - 1 naturally, and auto-hide taskbar unhides smoothly.
                 }
                 catch (Exception ex)
                 {
