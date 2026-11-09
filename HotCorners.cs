@@ -9,56 +9,32 @@ namespace SmartHotCorners
 {
     class Program
     {
-        [DllImport("user32.dll")]
-        public static extern bool SetProcessDPIAware();
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr OpenDesktop(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool SetThreadDesktop(IntPtr hDesktop);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        [DllImport("user32.dll")]
-        public static extern int GetSystemMetrics(int nIndex);
-
-        [DllImport("user32.dll")]
-        public static extern bool SetCursorPos(int X, int Y);
-
-        [DllImport("user32.dll")]
-        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr ProcessId);
-
-        [DllImport("kernel32.dll")]
-        public static extern uint GetCurrentThreadId();
-
-        [DllImport("user32.dll")]
-        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr OpenDesktop(string s, uint f, bool i, uint a);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool SetThreadDesktop(IntPtr d);
+        [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetWindowsHookEx(int id, LowLevelMouseProc fn, IntPtr mod, uint thId);
+        [DllImport("user32.dll", SetLastError = true)] public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)] public static extern IntPtr GetModuleHandle(string mod);
+        [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
+        [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr ProcessId);
+        [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 
         public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         const int WH_MOUSE_LL = 14;
         const int WM_MOUSEMOVE = 0x0200;
-
         const int KEYEVENTF_KEYUP = 0x0002;
         const byte VK_LWIN = 0x5B;
         const byte VK_TAB = 0x09;
+
+        public struct RECT { public int left, top, right, bottom; }
 
 #pragma warning disable 0649
         public struct POINT
@@ -82,34 +58,29 @@ namespace SmartHotCorners
         private static LowLevelMouseProc hookProc;
         private static string logPath;
         private static string virtualDesktopPath;
+        private static IntPtr trayHwnd;
 
         // State tracking
         private static bool inTopLeft = false;
         private static bool inBottomLeft = false;
         private static bool inBottomRight = false;
         private static long lastTriggerTime = 0;
+        private static int lastX = 960;
+        private static int lastY = 600;
 
         static void Main(string[] args)
         {
-            // Enable Per-Monitor DPI Awareness so screen metrics and hook coordinates align 1:1
             SetProcessDPIAware();
 
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             logPath = Path.Combine(baseDir, "HotCorners.log");
 
-            // Resolve VirtualDesktop.exe path dynamically
             virtualDesktopPath = Path.Combine(baseDir, "VirtualDesktop.exe");
             if (!File.Exists(virtualDesktopPath))
             {
                 string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WindowsHotCorners", "VirtualDesktop.exe");
-                if (File.Exists(appDataDir))
-                {
-                    virtualDesktopPath = appDataDir;
-                }
-                else if (File.Exists(@"E:\Windows Configurations\VirtualDesktop.exe"))
-                {
-                    virtualDesktopPath = @"E:\Windows Configurations\VirtualDesktop.exe";
-                }
+                if (File.Exists(appDataDir)) virtualDesktopPath = appDataDir;
+                else if (File.Exists(@"E:\Windows Configurations\VirtualDesktop.exe")) virtualDesktopPath = @"E:\Windows Configurations\VirtualDesktop.exe";
             }
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
@@ -119,27 +90,30 @@ namespace SmartHotCorners
 
             try
             {
-                Log("Starting Smart Hot Corners (v2.0 Zero-Taskbar Engine)...");
+                Log("Starting Smart Hot Corners (v2.1 Maximum Efficiency Shield Engine)...");
 
                 Thread worker = new Thread(() =>
                 {
                     try
                     {
-                        // Attach to active user desktop
                         IntPtr hDesk = OpenDesktop("Default", 0, false, 0x01FF);
                         bool deskSet = SetThreadDesktop(hDesk);
                         Log(string.Format("Worker thread desktop set: {0}", deskSet));
 
-                        int w = GetSystemMetrics(0); // Screen width (physical pixels)
-                        int h = GetSystemMetrics(1); // Screen height (physical pixels)
+                        trayHwnd = FindWindow("Shell_TrayWnd", null);
 
-                        const int CORNER_W = 90;        // Corner width in physical pixels
-                        const int CORNER_H = 80;        // Corner height in physical pixels
-                        const int EXIT_DIST = 140;      // Distance to re-arm corner trigger
-                        const int COOLDOWN_MS = 400;    // Milliseconds between switches
-                        int safeY = h - 6;              // Barrier 6px above bottom edge (taskbar sensor is at h - 2)
+                        int w = GetSystemMetrics(0); // Screen width
+                        int h = GetSystemMetrics(1); // Screen height
 
-                        Log(string.Format("Display: {0}x{1}. Corner Box: {2}x{3}px. Safe Barrier: Y={4}", w, h, CORNER_W, CORNER_H, safeY));
+                        const int CORNER_TRIGGER_W = 120; // 120px physical corner trigger width
+                        const int CORNER_TRIGGER_H = 100; // 100px physical corner trigger height
+                        const int SHIELD_WING_W = 420;    // 420px wide corner shield zone
+                        const int EXIT_DIST = 160;        // Distance to re-arm corner trigger
+                        const int COOLDOWN_MS = 400;      // Milliseconds between switches
+                        int safeY = h - 25;                // Safe barrier: 25px above bottom edge (taskbar sensor at h - 2)
+
+                        Log(string.Format("Metrics: {0}x{1}. Trigger Box: {2}x{3}px. Shield Wing: {4}px. Safe Barrier: Y={5}",
+                            w, h, CORNER_TRIGGER_W, CORNER_TRIGGER_H, SHIELD_WING_W, safeY));
 
                         hookProc = (nCode, wParam, lParam) =>
                         {
@@ -150,8 +124,8 @@ namespace SmartHotCorners
                                 int curY = ms.pt.y;
                                 long now = Environment.TickCount;
 
-                                // 1. TOP-LEFT: Task View (Win + Tab)
-                                if (curX <= CORNER_W && curY <= CORNER_H)
+                                // 1. TOP-LEFT CORNER: Task View (Win + Tab)
+                                if (curX <= CORNER_TRIGGER_W && curY <= CORNER_TRIGGER_H)
                                 {
                                     if (!inTopLeft && (now - lastTriggerTime >= COOLDOWN_MS))
                                     {
@@ -166,8 +140,8 @@ namespace SmartHotCorners
                                     inTopLeft = false;
                                 }
 
-                                // 2. BOTTOM-LEFT: Virtual Desktop Left (Ctrl + Win + Left)
-                                bool isBL = (curX <= CORNER_W && curY >= (h - CORNER_H));
+                                // 2. BOTTOM-LEFT CORNER: Previous Virtual Desktop (Left)
+                                bool isBL = (curX <= CORNER_TRIGGER_W && curY >= (h - CORNER_TRIGGER_H));
                                 if (isBL)
                                 {
                                     if (!inBottomLeft && (now - lastTriggerTime >= COOLDOWN_MS))
@@ -177,22 +151,14 @@ namespace SmartHotCorners
                                         Log(string.Format("Bottom-Left flick at ({0},{1}). Triggering Desktop Left.", curX, curY));
                                         SwitchDesktopLeft();
                                     }
-
-                                    // CORNER TASKBAR SHIELD: Clamp cursor above taskbar sensor (h - 2)
-                                    // and swallow the raw mouse event so Windows Explorer NEVER sees mouse in the corner!
-                                    if (curY >= safeY)
-                                    {
-                                        SetCursorPos(curX, safeY);
-                                        return (IntPtr)1; // Swallow event
-                                    }
                                 }
                                 else if (curX > EXIT_DIST || curY < (h - EXIT_DIST))
                                 {
                                     inBottomLeft = false;
                                 }
 
-                                // 3. BOTTOM-RIGHT: Virtual Desktop Right (Ctrl + Win + Right)
-                                bool isBR = (curX >= (w - CORNER_W) && curY >= (h - CORNER_H));
+                                // 3. BOTTOM-RIGHT CORNER: Next Virtual Desktop (Right)
+                                bool isBR = (curX >= (w - CORNER_TRIGGER_W) && curY >= (h - CORNER_TRIGGER_H));
                                 if (isBR)
                                 {
                                     if (!inBottomRight && (now - lastTriggerTime >= COOLDOWN_MS))
@@ -202,22 +168,52 @@ namespace SmartHotCorners
                                         Log(string.Format("Bottom-Right flick at ({0},{1}). Triggering Desktop Right.", curX, curY));
                                         SwitchDesktopRight();
                                     }
-
-                                    // CORNER TASKBAR SHIELD: Clamp cursor above taskbar sensor (h - 2)
-                                    // and swallow the raw mouse event so Windows Explorer NEVER sees mouse in the corner!
-                                    if (curY >= safeY)
-                                    {
-                                        SetCursorPos(curX, safeY);
-                                        return (IntPtr)1; // Swallow event
-                                    }
                                 }
                                 else if (curX < (w - EXIT_DIST) || curY < (h - EXIT_DIST))
                                 {
                                     inBottomRight = false;
                                 }
+
+                                // 4. ZERO-TASKBAR CORNER SHIELD & UP-TO-DOWN SENSOR GATE
+                                // Check if taskbar is currently hidden
+                                RECT rTray;
+                                GetWindowRect(trayHwnd, out rTray);
+                                bool taskbarVisible = (rTray.top < (h - 20));
+
+                                if (!taskbarVisible)
+                                {
+                                    // A. CORNER WINGS (Left 420px or Right 420px):
+                                    // 100% SHIELDED. Taskbar NEVER receives mouse input in corners.
+                                    if (curX <= SHIELD_WING_W || curX >= (w - SHIELD_WING_W))
+                                    {
+                                        if (curY >= safeY)
+                                        {
+                                            SetCursorPos(curX, safeY);
+                                            lastX = curX;
+                                            lastY = safeY;
+                                            return (IntPtr)1; // Swallow event
+                                        }
+                                    }
+                                    // B. CENTER ZONE (Between 420px and W - 420px):
+                                    // ONLY allow unhiding if moving UP-to-DOWN from above
+                                    else
+                                    {
+                                        bool isMovingDownFromAbove = (curY > lastY && lastY < (h - 40));
+                                        // If sweeping horizontally along the bottom without moving down from above:
+                                        if (!isMovingDownFromAbove && curY >= safeY)
+                                        {
+                                            SetCursorPos(curX, safeY);
+                                            lastX = curX;
+                                            lastY = safeY;
+                                            return (IntPtr)1;
+                                        }
+                                    }
+                                }
+
+                                lastX = curX;
+                                lastY = curY;
                             }
 
-                            // Pass through all center mouse movements (up-to-down unhides taskbar normally)
                             return CallNextHookEx(hookId, nCode, wParam, lParam);
                         };
 
@@ -227,9 +223,8 @@ namespace SmartHotCorners
                             hookId = SetWindowsHookEx(WH_MOUSE_LL, hookProc, GetModuleHandle(curModule.ModuleName), 0);
                         }
 
-                        Log(string.Format("Low-level mouse hook installed: {0}", hookId != IntPtr.Zero));
+                        Log(string.Format("Low-level mouse hook active: {0}", hookId != IntPtr.Zero));
 
-                        // Message pump processes mouse hook events with 0ms latency
                         Application.Run();
                     }
                     catch (Exception ex)
@@ -238,7 +233,7 @@ namespace SmartHotCorners
                     }
                 });
 
-                worker.IsBackground = false; // Foreground thread keeps process alive permanently
+                worker.IsBackground = false;
                 worker.Start();
                 Log("Worker thread launched (foreground).");
 
@@ -260,10 +255,7 @@ namespace SmartHotCorners
                     uint fgThread = GetWindowThreadProcessId(fgHwnd, IntPtr.Zero);
                     uint curThread = GetCurrentThreadId();
 
-                    if (fgThread != 0 && fgThread != curThread)
-                    {
-                        AttachThreadInput(curThread, fgThread, true);
-                    }
+                    if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, true);
 
                     keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero);
                     keybd_event(VK_TAB, 0, 0, UIntPtr.Zero);
@@ -271,10 +263,7 @@ namespace SmartHotCorners
                     keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
                     keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-                    if (fgThread != 0 && fgThread != curThread)
-                    {
-                        AttachThreadInput(curThread, fgThread, false);
-                    }
+                    if (fgThread != 0 && fgThread != curThread) AttachThreadInput(curThread, fgThread, false);
                 }
                 catch (Exception ex)
                 {
