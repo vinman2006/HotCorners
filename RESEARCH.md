@@ -154,13 +154,15 @@ The corner shield width is expanded from $120\text{px}$ to $260\text{px}$ on bot
 
 Any diagonal flick heading into either corner enters the shield wing while $Y \le 1170$, well before the cursor can touch the bottom edge.
 
-### Layer 3: Hardware Sensor Clamping at $Y = 1190$ & Pure Packet Swallow
-Within either corner wing, whenever the cursor approaches the bottom boundary ($Y \ge H - 30$):
-1. All mouse move packets are unconditionally swallowed:
-   $$\text{Return } (\text{IntPtr})1$$
-2. If raw hardware deltas attempt to pull the cursor beyond $Y = 1190$ ($H - 10$):
-   $$\text{SetCursorPos}(rawX, H - 10)$$
-Because $1190$ is **8 physical pixels safely above** the $1198$ wake sensor, Explorer never receives an edge trigger event.
+### Layer 3: Kernel `ClipCursor` Clamping at $Y \le 1190$ & Zero-Synthetic-Injection Overshoot Swallow
+In v3.2, calling `SetCursorPos(rawX, H - 10)` inside `LowLevelMouseProc` and unconditionally swallowing all moves at $Y \ge H - 30$ introduced two subtle defects:
+1. Swallowing all packets inside the $260\text{px}$ wings froze horizontal ($X$-axis) movement, preventing fluid entry into the $X \le 60$ trigger hitbox.
+2. `SetCursorPos` injected synthetic `LLMHF_INJECTED` packets, risking hook dropouts under high-polling mice.
+
+**The v3.3 Kernel Refinement:**
+* **Pre-Armed Kernel `ClipCursor` Fence:** When the cursor enters a $260\text{px}$ corner wing and $Y \ge H - 120$ ($1080\text{px}$), HotCorners pre-arms a kernel `ClipCursor` fence at $Y \le 1190$ ($H - 10$, $8\text{px}$ safely above the $1198$ wake sensor). This physically restricts cursor movement inside `win32kfull.sys` without synthetic event injection!
+* **Selective Overshoot Swallow:** Only packets attempting to cross $rawY > 1190$ are swallowed (`return (IntPtr)1`). Horizontal ($X$-axis) movement across $0 \le X \le 260$ and upward movement remain completely fluid.
+* **Instantaneous Center Release:** As soon as the cursor exits the corner wings ($260 < X < 1660$), `ClipCursor(IntPtr.Zero)` is immediately released, allowing frictionless travel down to $Y = 1199$ in the center.
 
 ### Layer 4: Post-Switch Taskbar Auto-Hide Guard (`SetWindowPos`)
 As an ironclad safety net, immediately after each virtual desktop transition, HotCorners queries `GetWindowRect(hTray)`. If `Shell_TrayWnd` ever deviates from its hidden posture ($Top < H - 10$), it immediately executes:
@@ -194,3 +196,4 @@ All tests executed on Windows 11 Build 26100 (24H2) with high-polling gaming mou
 This research demonstrates that Windows 11 taskbar auto-hide issues during corner and desktop switching workflows are not caused by hardware defects or hook timeouts, but by **OS animation layer collisions** and **sub-pixel edge sensor hit-testing**. 
 
 By pairing **spatial coordinate segregation ($260\text{px}$ wings vs. $1400\text{px}$ center)** with **switch animation suppression (`/Animation:0`)** and **post-switch Win32 clamping**, macOS/GNOME-style Hot Corners function with 100% stability, zero taskbar interference, and zero performance penalty.
+

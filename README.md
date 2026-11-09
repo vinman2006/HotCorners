@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ Windows Hot Corners v3.2
+# ⚡ Windows Hot Corners v3.3
 
 ### macOS & GNOME style Hot Corners — natively engineered for Windows 11 & 10.
 ### Featuring Corner Taskbar Immunity & Unrestricted Center Auto-Hide.
@@ -11,6 +11,7 @@
 [![Memory Footprint](https://img.shields.io/badge/RAM-~20%20MB-success)](#performance)
 [![CPU Usage](https://img.shields.io/badge/CPU-0.0%25-brightgreen)](#performance)
 [![Deep Research](https://img.shields.io/badge/Research-Empirical%20Docs-informational)](RESEARCH.md)
+[![Debugging Prompt](https://img.shields.io/badge/Debugging-Reference%20Prompt-blue)](HotCorners_Debugging_Prompt.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <br/>
@@ -131,10 +132,12 @@ flowchart TD
 ```
 
 1. **Tight 60×45 px Intentional Hitboxes:** Corner triggers are tuned for deliberate physical flicks. Casual mouse navigation, selecting text, or clicking scrollbars never triggers desktop switching.
-2. **260px Spatial Shield Wings:** Left wing ($X \le 260$) and right wing ($X \ge 1660$) capture all diagonal trajectories, clamping the cursor at $Y = 1190$ and swallowing packets so the hardware cursor never touches the $Y \ge 1198$ taskbar sensor.
-3. **Switch Animation Suppression:** Calls `VirtualDesktop.exe` with `/Animation:0 /Quiet /Left|Right /Wrap`, removing the Windows 11 desktop switch overlay that stole focus and forced `Shell_TrayWnd` to pop up.
-4. **Post-Switch Clamping:** Any rogue focus attempt is immediately corrected by `SetWindowPos(hTray, ..., SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING)`.
-5. **1400px Frictionless Center Taskbar:** Between $X = 260$ and $X = 1660$, mouse input passes through untouched with zero latency, unhiding the auto-hide taskbar naturally.
+2. **260px Spatial Shield Wings:** Left wing ($X \le 260$) and right wing ($X \ge 1660$) capture all diagonal trajectories, keeping a massive $1400\text{px}$ center edge ($260 < X < 1660$) completely open.
+3. **Kernel `ClipCursor` Safety & Selective Overshoot Swallow:** Pre-arms a kernel `ClipCursor` ceiling at $Y \le 1190$ ($8\text{px}$ above the $1198$ taskbar sensor) inside the corner wings, with zero synthetic `SetCursorPos` event injection. Only packets attempting to cross $rawY > 1190$ are swallowed, keeping horizontal $X$ sliding and upward motion 100% fluid.
+4. **Switch Animation Suppression:** Calls `VirtualDesktop.exe` with `/Animation:0 /Quiet /Left|Right /Wrap`, removing the Windows 11 desktop switch overlay that stole focus and forced `Shell_TrayWnd` to pop up.
+5. **Post-Switch Clamping:** Any rogue focus attempt is immediately corrected by `SetWindowPos(hTray, ..., SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING)`.
+6. **1400px Frictionless Center Taskbar:** Between $X = 260$ and $X = 1660$, mouse input passes through untouched with zero latency, unhiding the auto-hide taskbar naturally.
+7. **Built-in Verification Diagnostics:** Launch `HotCorners.exe --verify` anytime to inspect active physical metrics, shield boundaries, and taskbar states.
 
 ---
 
