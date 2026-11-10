@@ -90,7 +90,8 @@ That's it!
 
 | Corner | Default State | Action | Mechanism | Experience |
 | :---: | :---: | :---: | :---: | :--- |
-| ↖️ *(Top-Left)* | **ACTIVE** | **Window Switcher (`Alt + Tab` Popup)** | Atomic `SendInput` (`Ctrl + Alt + Tab`) + `SetWinEventHook` Guard | Pops out the native Windows 11 `Task Switching` grid immediately; tray-toggleable (persisted in HKCU) to **Task View** (`Shell.Application.WindowSwitcher` / `Win + Tab`), plus automatic zero-CPU `SW_SHOWMINIMIZED` self-healing for Windows 11 Alt+Tab. |
+| ↖️ *(Top-Left)* | **ACTIVE** | **Task View (`Win + Tab`)** | `Shell.Application.WindowSwitcher()` | Opens Windows Task View (`Win + Tab`) with 0 synthetic keystrokes; tray-toggleable to **Alt+Tab Popup**. |
+| 🖱️ *(Inside Task View)* | **ACTIVE** | **Scroll Virtual Desktops** | `WH_MOUSE_LL` (`WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL`) -> `Ctrl + Win + Left/Right` | Linux GNOME-style workspace switching: scroll wheel Up/Down (or 2-finger touchpad swipe) inside `Win + Tab` Task View switches desktops cleanly while keeping Task View open! |
 | ↙️ *(Bottom-Left)* | *Disabled (Native)* | **Previous Desktop** | `Ctrl + Win + Left` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_LEFT`. |
 | ↘️ *(Bottom-Right)* | *Disabled (Native)* | **Next Desktop** | `Ctrl + Win + Right` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_RIGHT`. |
 | ⬇️ *(Bottom Edge)* | **ACTIVE** | **Taskbar Auto-Hide** | Native Slide | Moves down to reveal taskbar 100% natively without interference. |

@@ -1,19 +1,16 @@
 /*
  * HotCorners.cs — Native Win32 Hot Corners Daemon for Windows 11 & 10
- * Configuration: Single Top-Left Hot Corner + Self-Healing Alt+Tab Task Switching Guard
- *
- * Features:
- *   - Only Upper-Left Corner is active; bottom corners & bottom edge remain 100% stock native Windows.
- *   - Two accurate Upper-Left modes (persisted in HKCU & switchable via System Tray):
- *       1) Window Switcher (Alt + Tab): Pops out the native Windows 'Task Switching' grid via
- *          atomic SendInput (Ctrl + Alt + Tab with hardware scan codes).
- *       2) Task View (Win + Tab): Launches native Task View via Shell.Application COM (0 keystrokes).
- *   - Built-in Zero-CPU SetWinEventHook Guard (EVENT_SYSTEM_MINIMIZESTART + EVENT_SYSTEM_FOREGROUND):
- *     On Windows 11 (24H2/26H2), Explorer's singleton 'Task Switching' XamlExplorerHostIslandWindow
- *     can occasionally get trapped in SW_SHOWMINIMIZED (159x27) after Virtual Desktop transitions,
- *     causing Alt+Tab to switch windows invisibly without popping out the switcher overlay.
- *     HotCorners detects and repairs this in-place (cloaked SW_SHOWNOACTIVATE -> SW_HIDE) with 0 flicker.
- *   - 0.0% CPU, Per-Monitor V2 DPI awareness (1:1 physical pixel precision), D3D fullscreen & drag guards.
+ * Configuration:
+ *   1. Upper-Left Corner -> Windows Task View (Win + Tab) via Shell.Application COM (0 keystrokes).
+ *      (Switchable via System Tray to Alt+Tab Window Switcher popup.)
+ *   2. GNOME / Linux-Style Scroll-to-Switch-Desktops inside Task View:
+ *      While Task View (Win + Tab) is open (whether opened via Upper-Left corner or keyboard Win+Tab),
+ *      scrolling Mouse Wheel Up/Down or Touchpad 2-finger Up/Down/Left/Right switches Virtual Desktops
+ *      seamlessly while keeping the Task View interface open!
+ *   3. Zero-CPU SetWinEventHook Self-Healing Guard for Windows 11 'Task Switching' (Alt+Tab) Popup:
+ *      Automatically prevents Explorer's Alt+Tab XamlExplorerHostIslandWindow from getting trapped in
+ *      SW_SHOWMINIMIZED (159x27) across virtual desktop transitions.
+ *   4. Bottom corners & bottom edge remain 100% untouched stock Windows native behavior.
  *
  * Compilation (.NET Framework 4.8 Built-in Compiler):
  *   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:HotCorners.exe HotCorners.cs
@@ -32,33 +29,40 @@ namespace HotCornersDaemon
 {
     public enum CornerAction
     {
-        WindowSwitcher = 0, // Native Alt+Tab 'Task Switching' popup (Ctrl + Alt + Tab)
-        TaskView = 1        // Native 'Task View' (Shell.Application.WindowSwitcher / Win + Tab)
+        TaskView = 0,       // Native 'Task View' (Win + Tab via Shell.Application.WindowSwitcher) [DEFAULT]
+        WindowSwitcher = 1  // Native Alt+Tab 'Task Switching' popup (Ctrl + Alt + Tab)
     }
 
     internal static class Program
     {
         // =====================================================================
-        // 1. CONFIGURATION: UPPER-LEFT CORNER ONLY
+        // 1. CONFIGURATION: UPPER-LEFT (WIN+TAB) + TASK VIEW DESKTOP SCROLLING
         // =====================================================================
         private const string REG_KEY_PATH = @"Software\WindowsHotCorners";
-        private const string REG_VAL_ACTION = "TopLeftAction";
+        private const string REG_VAL_ACTION = "TopLeftMode";
 
-        private static CornerAction _topLeftAction = CornerAction.WindowSwitcher;
-        private const bool ENABLE_TOP_LEFT = true;       // Active
-        private const bool ENABLE_BOTTOM_LEFT = false;   // Disabled (Stock native Windows)
-        private const bool ENABLE_BOTTOM_RIGHT = false;  // Disabled (Stock native Windows)
+        private static CornerAction _topLeftAction = CornerAction.TaskView;
+        private const bool ENABLE_TOP_LEFT = true;             // Active
+        private const bool ENABLE_TASKVIEW_SCROLL = true;      // Scroll inside Task View switches virtual desktops
+        private const bool ENABLE_BOTTOM_LEFT = false;         // Disabled (Stock native Windows)
+        private const bool ENABLE_BOTTOM_RIGHT = false;        // Disabled (Stock native Windows)
 
-        private const int CORNER_W = 50;                 // Top-left trigger hitbox width (px)
-        private const int CORNER_H = 45;                 // Top-left trigger hitbox height (px)
-        private const int RESET_HYSTERESIS_PX = 75;      // Distance out of corner to re-arm (px)
-        private const long TRIGGER_COOLDOWN_MS = 400;    // Cooldown between consecutive triggers (ms)
+        private const int CORNER_W = 50;                       // Top-left trigger hitbox width (px)
+        private const int CORNER_H = 45;                       // Top-left trigger hitbox height (px)
+        private const int RESET_HYSTERESIS_PX = 75;            // Distance out of corner to re-arm (px)
+        private const long TRIGGER_COOLDOWN_MS = 400;          // Cooldown between consecutive corner toggles (ms)
+
+        private const int WHEEL_THRESHOLD = 120;               // 1 standard wheel notch (accumulates touchpad deltas)
+        private const long SCROLL_SWITCH_COOLDOWN_MS = 150;    // Cooldown between desktop steps while scrolling (ms)
+        private const long SCROLL_ACCUM_RESET_MS = 350;        // Reset partial touchpad accumulation after idle pause
 
         // =====================================================================
         // 2. WIN32 API DECLARATIONS
         // =====================================================================
         private const int WH_MOUSE_LL = 14;
         private const int WM_MOUSEMOVE = 0x0200;
+        private const int WM_MOUSEWHEEL = 0x020A;
+        private const int WM_MOUSEHWHEEL = 0x020E;
         private const int WM_DISPLAYCHANGE = 0x007E;
         private const int WM_SETTINGCHANGE = 0x001A;
         private const uint LLMHF_INJECTED = 0x00000001;
@@ -70,6 +74,8 @@ namespace HotCornersDaemon
         private const ushort VK_SHIFT = 0x10;
         private const ushort VK_CONTROL = 0x11;
         private const ushort VK_MENU = 0x12;
+        private const ushort VK_LEFT = 0x25;
+        private const ushort VK_RIGHT = 0x27;
         private const ushort VK_LWIN = 0x5B;
         private const ushort VK_RWIN = 0x5C;
         private const ushort VK_LCONTROL = 0xA2;
@@ -77,6 +83,7 @@ namespace HotCornersDaemon
         private const ushort VK_LMENU = 0xA4;
         private const ushort VK_RMENU = 0xA5;
 
+        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const uint KEYEVENTF_KEYUP = 0x0002;
         private const uint INPUT_KEYBOARD = 1;
 
@@ -221,6 +228,9 @@ namespace HotCornersDaemon
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -263,11 +273,16 @@ namespace HotCornersDaemon
 
         private static bool _topLeftArmed = true;
         private static long _lastTriggerTick = 0;
+
+        private static int _scrollAccum = 0;
+        private static long _lastWheelTick = 0;
+        private static long _lastScrollSwitchTick = 0;
+
         private static readonly Stopwatch _Clock = Stopwatch.StartNew();
 
         private static NotifyIcon _TrayIcon;
-        private static MenuItem _menuItemAltTab;
         private static MenuItem _menuItemTaskView;
+        private static MenuItem _menuItemAltTab;
 
         // =====================================================================
         // 4. ENTRY POINT
@@ -305,7 +320,7 @@ namespace HotCornersDaemon
                 ReleaseStuckModifiers();
                 RepairTaskSwitchingIfMinimized(false);
 
-                // Install Low-Level Mouse Hook
+                // Install Low-Level Mouse Hook (Corner Flick + Task View Scroll Switcher)
                 _mouseHookDelegate = HookCallback;
                 using (Process curProcess = Process.GetCurrentProcess())
                 using (ProcessModule curModule = curProcess.MainModule)
@@ -391,7 +406,7 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 5. SELF-HEALING 'TASK SWITCHING' ALT+TAB OVERLAY GUARD
+        // 5. SELF-HEALING 'TASK SWITCHING' (ALT+TAB) OVERLAY GUARD
         // =====================================================================
         private static void OnWinEvent(
             IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
@@ -401,14 +416,14 @@ namespace HotCornersDaemon
                 return;
             }
 
-            if (IsTaskSwitchingWindow(hwnd) && IsIconic(hwnd))
+            if (IsIslandWindowWithTitle(hwnd, "Task Switching") && IsIconic(hwnd))
             {
                 bool keepVisibleIfActivating = (eventType == EVENT_SYSTEM_FOREGROUND);
                 RepairTaskSwitchingHwnd(hwnd, keepVisibleIfActivating);
             }
         }
 
-        private static bool IsTaskSwitchingWindow(IntPtr hwnd)
+        private static bool IsIslandWindowWithTitle(IntPtr hwnd, string expectedTitle)
         {
             StringBuilder cls = new StringBuilder(64);
             if (GetClassName(hwnd, cls, cls.Capacity) == 0 ||
@@ -419,7 +434,7 @@ namespace HotCornersDaemon
 
             StringBuilder title = new StringBuilder(64);
             GetWindowText(hwnd, title, title.Capacity);
-            return string.Equals(title.ToString(), "Task Switching", StringComparison.Ordinal);
+            return string.Equals(title.ToString(), expectedTitle, StringComparison.Ordinal);
         }
 
         internal static void RepairTaskSwitchingIfMinimized(bool keepVisible)
@@ -437,7 +452,6 @@ namespace HotCornersDaemon
             {
                 if (!keepVisible)
                 {
-                    // Cloak before restoring so DWM shows 0 frames on screen
                     int cloak = 1;
                     DwmSetWindowAttribute(hTaskSwitching, DWMWA_CLOAK, ref cloak, sizeof(int));
                     ShowWindow(hTaskSwitching, SW_SHOWNOACTIVATE);
@@ -453,41 +467,97 @@ namespace HotCornersDaemon
             }
         }
 
+        private static bool IsTaskViewOpen()
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg != IntPtr.Zero && IsIslandWindowWithTitle(fg, "Task View"))
+            {
+                return true;
+            }
+
+            IntPtr hTV = FindWindow("XamlExplorerHostIslandWindow", "Task View");
+            return hTV != IntPtr.Zero && IsWindowVisible(hTV);
+        }
+
         // =====================================================================
-        // 6. LOW-LEVEL MOUSE HOOK (< 0.001ms Latency, Top-Left Only)
+        // 6. LOW-LEVEL MOUSE HOOK (< 0.001ms Latency, Top-Left + Task View Scroll)
         // =====================================================================
         private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEMOVE)
+            if (nCode >= 0)
             {
-                MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                int msg = wParam.ToInt32();
 
-                if ((hookStruct.flags & LLMHF_INJECTED) != 0)
+                if (msg == WM_MOUSEMOVE)
                 {
-                    return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
-                }
+                    MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
 
-                int rawX = hookStruct.pt.X;
-                int rawY = hookStruct.pt.Y;
-
-                int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
-                int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
-
-                // A. Re-Arming Hysteresis Check (must travel 75px out of top-left)
-                if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
-                {
-                    _topLeftArmed = true;
-                }
-
-                // B. Top-Left Corner Trigger (X <= 50, Y <= 45)
-                if (ENABLE_TOP_LEFT && x <= CORNER_W && y <= CORNER_H)
-                {
-                    long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
-                    if (_topLeftArmed && (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS)
+                    if ((hookStruct.flags & LLMHF_INJECTED) != 0)
                     {
-                        _topLeftArmed = false;
-                        _lastTriggerTick = nowMs;
-                        TriggerTopLeftAsync();
+                        return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
+                    }
+
+                    int rawX = hookStruct.pt.X;
+                    int rawY = hookStruct.pt.Y;
+
+                    int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
+                    int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
+
+                    // A. Re-Arming Hysteresis Check (must travel 75px out of top-left)
+                    if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
+                    {
+                        _topLeftArmed = true;
+                    }
+
+                    // B. Top-Left Corner Trigger (X <= 50, Y <= 45) -> Opens Task View (Win+Tab)
+                    if (ENABLE_TOP_LEFT && x <= CORNER_W && y <= CORNER_H)
+                    {
+                        long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
+                        if (_topLeftArmed && (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS)
+                        {
+                            _topLeftArmed = false;
+                            _lastTriggerTick = nowMs;
+                            TriggerTopLeftAsync();
+                        }
+                    }
+                }
+                else if (ENABLE_TASKVIEW_SCROLL && (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL))
+                {
+                    MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+                    if ((hookStruct.flags & LLMHF_INJECTED) == 0 && IsTaskViewOpen())
+                    {
+                        short rawDelta = unchecked((short)((uint)hookStruct.mouseData >> 16));
+                        if (rawDelta != 0)
+                        {
+                            // Vertical wheel: Scroll Up (+delta) -> Left desktop (-), Scroll Down (-delta) -> Right desktop (+)
+                            // Horizontal wheel: Scroll Left (-delta) -> Left desktop (-), Scroll Right (+delta) -> Right desktop (+)
+                            int stepDelta = (msg == WM_MOUSEWHEEL) ? -rawDelta : rawDelta;
+                            long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
+
+                            if ((nowMs - _lastWheelTick) > SCROLL_ACCUM_RESET_MS ||
+                                (_scrollAccum != 0 && Math.Sign(_scrollAccum) != Math.Sign(stepDelta)))
+                            {
+                                _scrollAccum = 0;
+                            }
+
+                            _lastWheelTick = nowMs;
+                            _scrollAccum += stepDelta;
+
+                            if (Math.Abs(_scrollAccum) >= WHEEL_THRESHOLD)
+                            {
+                                bool goRight = (_scrollAccum > 0);
+                                _scrollAccum = 0;
+
+                                if ((nowMs - _lastScrollSwitchTick) >= SCROLL_SWITCH_COOLDOWN_MS)
+                                {
+                                    _lastScrollSwitchTick = nowMs;
+                                    SwitchVirtualDesktopAsync(goRight);
+                                }
+                            }
+                        }
+
+                        // Swallow wheel packets inside Task View so the window grid doesn't fight desktop switching
+                        return (IntPtr)1;
                     }
                 }
             }
@@ -496,7 +566,7 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 7. ASYNC TOP-LEFT ACTION DISPATCH
+        // 7. ASYNC ACTION & DESKTOP SWITCH DISPATCH
         // =====================================================================
         private static bool IsMouseButtonPressed()
         {
@@ -513,8 +583,9 @@ namespace HotCornersDaemon
             return false;
         }
 
-        private static INPUT MakeKeyInput(ushort vk, bool isDown)
+        private static INPUT MakeKeyInput(ushort vk, bool isDown, bool isExtended = false)
         {
+            uint flags = (isDown ? 0u : KEYEVENTF_KEYUP) | (isExtended ? KEYEVENTF_EXTENDEDKEY : 0u);
             return new INPUT
             {
                 type = INPUT_KEYBOARD,
@@ -524,12 +595,37 @@ namespace HotCornersDaemon
                     {
                         wVk = vk,
                         wScan = (ushort)MapVirtualKey(vk, 0),
-                        dwFlags = isDown ? 0u : KEYEVENTF_KEYUP,
+                        dwFlags = flags,
                         time = 0,
                         dwExtraInfo = IntPtr.Zero
                     }
                 }
             };
+        }
+
+        private static void SwitchVirtualDesktopAsync(bool goRight)
+        {
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    ushort arrowKey = goRight ? VK_RIGHT : VK_LEFT;
+                    INPUT[] seq = new INPUT[]
+                    {
+                        MakeKeyInput(VK_LCONTROL, true, false),
+                        MakeKeyInput(VK_LWIN, true, false),
+                        MakeKeyInput(arrowKey, true, true),
+                        MakeKeyInput(arrowKey, false, true),
+                        MakeKeyInput(VK_LWIN, false, false),
+                        MakeKeyInput(VK_LCONTROL, false, false)
+                    };
+                    SendInput((uint)seq.Length, seq, Marshal.SizeOf(typeof(INPUT)));
+                }
+                catch
+                {
+                    ReleaseStuckModifiers();
+                }
+            });
         }
 
         private static void TriggerTopLeftAsync()
@@ -544,26 +640,9 @@ namespace HotCornersDaemon
             {
                 try
                 {
-                    if (action == CornerAction.WindowSwitcher)
+                    if (action == CornerAction.TaskView)
                     {
-                        // First guarantee Explorer's 'Task Switching' window isn't minimized (showCmd=2)
-                        RepairTaskSwitchingIfMinimized(false);
-
-                        // Send atomic Ctrl+Alt+Tab so the Alt+Tab Task Switching overlay pops out and stays open for mouse selection
-                        INPUT[] seq = new INPUT[]
-                        {
-                            MakeKeyInput(VK_LCONTROL, true),
-                            MakeKeyInput(VK_LMENU, true),
-                            MakeKeyInput(VK_TAB, true),
-                            MakeKeyInput(VK_TAB, false),
-                            MakeKeyInput(VK_LMENU, false),
-                            MakeKeyInput(VK_LCONTROL, false)
-                        };
-                        SendInput((uint)seq.Length, seq, Marshal.SizeOf(typeof(INPUT)));
-                    }
-                    else
-                    {
-                        // Native Task View (Win + Tab) via Shell.Application COM (0 synthetic keystrokes)
+                        // Native Windows Task View (Win + Tab) via Shell.Application COM (0 synthetic keystrokes)
                         Type shellType = Type.GetTypeFromProgID("Shell.Application");
                         if (shellType != null)
                         {
@@ -582,6 +661,20 @@ namespace HotCornersDaemon
                             };
                             SendInput((uint)seq.Length, seq, Marshal.SizeOf(typeof(INPUT)));
                         }
+                    }
+                    else
+                    {
+                        RepairTaskSwitchingIfMinimized(false);
+                        INPUT[] seq = new INPUT[]
+                        {
+                            MakeKeyInput(VK_LCONTROL, true),
+                            MakeKeyInput(VK_LMENU, true),
+                            MakeKeyInput(VK_TAB, true),
+                            MakeKeyInput(VK_TAB, false),
+                            MakeKeyInput(VK_LMENU, false),
+                            MakeKeyInput(VK_LCONTROL, false)
+                        };
+                        SendInput((uint)seq.Length, seq, Marshal.SizeOf(typeof(INPUT)));
                     }
                 }
                 catch
@@ -622,6 +715,13 @@ namespace HotCornersDaemon
         {
             ContextMenu trayMenu = new ContextMenu();
 
+            _menuItemTaskView = new MenuItem("Upper-Left: Task View (Win + Tab) + Scroll Desktops", (s, e) =>
+            {
+                _topLeftAction = CornerAction.TaskView;
+                SaveActionPreference();
+                UpdateTrayMenu();
+            });
+
             _menuItemAltTab = new MenuItem("Upper-Left: Window Switcher (Alt + Tab Popup)", (s, e) =>
             {
                 _topLeftAction = CornerAction.WindowSwitcher;
@@ -629,15 +729,8 @@ namespace HotCornersDaemon
                 UpdateTrayMenu();
             });
 
-            _menuItemTaskView = new MenuItem("Upper-Left: Task View (Win + Tab)", (s, e) =>
-            {
-                _topLeftAction = CornerAction.TaskView;
-                SaveActionPreference();
-                UpdateTrayMenu();
-            });
-
-            trayMenu.MenuItems.Add(_menuItemAltTab);
             trayMenu.MenuItems.Add(_menuItemTaskView);
+            trayMenu.MenuItems.Add(_menuItemAltTab);
             trayMenu.MenuItems.Add("-");
             trayMenu.MenuItems.Add("Repair Alt+Tab Popup & Release Stuck Keys", (s, e) =>
             {
@@ -661,13 +754,13 @@ namespace HotCornersDaemon
 
         private static void UpdateTrayMenu()
         {
-            if (_menuItemAltTab != null) _menuItemAltTab.Checked = (_topLeftAction == CornerAction.WindowSwitcher);
             if (_menuItemTaskView != null) _menuItemTaskView.Checked = (_topLeftAction == CornerAction.TaskView);
+            if (_menuItemAltTab != null) _menuItemAltTab.Checked = (_topLeftAction == CornerAction.WindowSwitcher);
             if (_TrayIcon != null)
             {
-                _TrayIcon.Text = _topLeftAction == CornerAction.WindowSwitcher
-                    ? "Hot Corners (Top-Left: Alt+Tab Switcher)"
-                    : "Hot Corners (Top-Left: Task View)";
+                _TrayIcon.Text = _topLeftAction == CornerAction.TaskView
+                    ? "Hot Corners (Top-Left: Task View + Scroll Desktops)"
+                    : "Hot Corners (Top-Left: Alt+Tab Switcher)";
             }
         }
 
@@ -731,9 +824,11 @@ namespace HotCornersDaemon
         {
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("=== Windows Hot Corners Verification Report ===");
-            sb.AppendFormat("Configuration           : UPPER-LEFT CORNER ONLY + Alt+Tab Guard\r\n");
+            sb.AppendFormat("Configuration           : UPPER-LEFT (Task View) + Scroll Desktop Switcher\r\n");
             sb.AppendFormat("Upper-Left Action       : {0}\r\n",
-                _topLeftAction == CornerAction.WindowSwitcher ? "Window Switcher (Ctrl+Alt+Tab Popup)" : "Task View (Shell.Application)");
+                _topLeftAction == CornerAction.TaskView ? "Task View (Win + Tab / Shell COM)" : "Window Switcher (Ctrl+Alt+Tab Popup)");
+            sb.AppendFormat("Task View Scroll Switch : {0} (Wheel Up/Left -> Prev Desktop, Down/Right -> Next Desktop)\r\n",
+                ENABLE_TASKVIEW_SCROLL ? "ENABLED" : "DISABLED");
             sb.AppendFormat("Physical Screen Metrics : {0} x {1}\r\n", _screenW, _screenH);
             sb.AppendFormat("Top-Left Hitbox         : {0} x {1} px (Hysteresis: {2}px, Cooldown: {3}ms)\r\n",
                 CORNER_W, CORNER_H, RESET_HYSTERESIS_PX, TRIGGER_COOLDOWN_MS);
@@ -747,10 +842,6 @@ namespace HotCornersDaemon
                 GetWindowPlacement(hTS, ref wp);
                 sb.AppendFormat("Task Switching HWND     : 0x{0:X} | Rect=({1},{2},{3},{4}) | showCmd={5} | IsIconic={6}\r\n",
                     hTS.ToInt64(), r.Left, r.Top, r.Right, r.Bottom, wp.showCmd, IsIconic(hTS));
-            }
-            else
-            {
-                sb.AppendLine("Task Switching HWND     : Not yet spawned (normal until first Alt+Tab)");
             }
 
             AttachConsole(-1);
