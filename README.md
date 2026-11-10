@@ -88,12 +88,12 @@ That's it!
 
 ## 🎯 Corner Controls & Key Actions
 
-| Corner | Action | Shortcut Emulated | Experience |
-| :---: | :---: | :---: | :--- |
-| ↖️ | **Task View** | `Win + Tab` | Instant fluid overview of all running application windows. |
-| ↙️ | **Previous Desktop** | `Ctrl + Win + Left` | Workspace slides seamlessly to the virtual desktop on the left. Taskbar stays 100% hidden. |
-| ↘️ | **Next Desktop** | `Ctrl + Win + Right` | Workspace slides seamlessly to the virtual desktop on the right. Taskbar stays 100% hidden. |
-| ⬇️ *(Center)* | **Auto-Hide Taskbar** | Native Slide | Moves down anywhere in the 1400px center edge to reveal your taskbar smoothly and immediately. |
+| Corner | Default State | Action | Shortcut Emulated | Experience |
+| :---: | :---: | :---: | :---: | :--- |
+| ↖️ *(Top-Left)* | **ACTIVE** | **Task View** | `Win + Tab` | Instant fluid overview of all running application windows. |
+| ↙️ *(Bottom-Left)* | *Disabled (Native)* | **Previous Desktop** | `Ctrl + Win + Left` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_LEFT`. |
+| ↘️ *(Bottom-Right)* | *Disabled (Native)* | **Next Desktop** | `Ctrl + Win + Right` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_RIGHT`. |
+| ⬇️ *(Bottom Edge)* | **ACTIVE** | **Taskbar Auto-Hide** | Native Slide | Moves down to reveal taskbar 100% natively without interference. |
 
 ---
 

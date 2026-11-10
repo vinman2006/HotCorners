@@ -72,3 +72,4 @@ When reporting or debugging an edge case, provide:
 3. **Complete Compilable `HotCorners.cs`:** Output the full, single-file C# source compilable via:
    `& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /target:winexe /optimize+ /out:'HotCorners.exe' 'HotCorners.cs'`
 4. **Verification Test:** Provide a one-command test to verify the fix on 1920×1200 (125% DPI).
+
