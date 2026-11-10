@@ -90,7 +90,7 @@ That's it!
 
 | Corner | Default State | Action | Mechanism | Experience |
 | :---: | :---: | :---: | :---: | :--- |
-| ↖️ *(Top-Left)* | **ACTIVE** | **Window Switcher (Alt + Tab)** | Shell COM (`IShellDispatch::WindowSwitcher`) | Instant fluid window switcher overlay without synthetic key injection; tray toggleable to Task View (`Win + Tab`). |
+| ↖️ *(Top-Left)* | **ACTIVE** | **Window Switcher (`Alt + Tab` Popup)** | Atomic `SendInput` (`Ctrl + Alt + Tab`) + `SetWinEventHook` Guard | Pops out the native Windows 11 `Task Switching` grid immediately; tray-toggleable (persisted in HKCU) to **Task View** (`Shell.Application.WindowSwitcher` / `Win + Tab`), plus automatic zero-CPU `SW_SHOWMINIMIZED` self-healing for Windows 11 Alt+Tab. |
 | ↙️ *(Bottom-Left)* | *Disabled (Native)* | **Previous Desktop** | `Ctrl + Win + Left` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_LEFT`. |
 | ↘️ *(Bottom-Right)* | *Disabled (Native)* | **Next Desktop** | `Ctrl + Win + Right` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_RIGHT`. |
 | ⬇️ *(Bottom Edge)* | **ACTIVE** | **Taskbar Auto-Hide** | Native Slide | Moves down to reveal taskbar 100% natively without interference. |
