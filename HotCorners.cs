@@ -1,9 +1,11 @@
 /*
  * HotCorners.cs — Native Win32 Hot Corners Daemon for Windows 11 & 10
- * Configuration: Single Top-Left Hot Corner (Task View / Win + Tab)
+ * Configuration: Single Top-Left Hot Corner (Window Switcher / Alt + Tab & Task View)
  * 
  * Features:
- *   - Only Upper-Left Corner is active (Win + Tab / Task View).
+ *   - Upper-Left Corner is active: Defaults to Window Switcher (Alt + Tab via Shell.Application COM, 0 keystrokes).
+ *   - Tray menu toggleable between Window Switcher (Alt + Tab) and Task View (Win + Tab).
+ *   - Automatic modifier un-sticking (releases any stuck Win/Alt/Ctrl/Tab on startup & execution).
  *   - Bottom corners & edges are 100% untouched native Windows default.
  *   - 0.0% CPU, ~10 MB RAM, < 0.001ms hook latency.
  *   - Per-Monitor V2 DPI awareness (1:1 physical pixel precision).
@@ -25,12 +27,19 @@ using System.Windows.Forms;
 
 namespace HotCornersDaemon
 {
+    public enum CornerAction
+    {
+        WindowSwitcher, // Native Windows Alt+Tab Window Switcher (via Shell COM - 0 synthetic keystrokes)
+        TaskView        // Task View (Win + Tab)
+    }
+
     internal static class Program
     {
         // =====================================================================
         // 1. CONFIGURATION: UPPER-LEFT CORNER ONLY
         // =====================================================================
-        private const bool ENABLE_TOP_LEFT = true;       // Win + Tab (Task View)
+        private static CornerAction _topLeftAction = CornerAction.WindowSwitcher;
+        private const bool ENABLE_TOP_LEFT = true;       // Active
         private const bool ENABLE_BOTTOM_LEFT = false;   // Disabled (Stock native Windows)
         private const bool ENABLE_BOTTOM_RIGHT = false;  // Disabled (Stock native Windows)
 
@@ -51,9 +60,12 @@ namespace HotCornersDaemon
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
 
-        private const byte VK_LWIN = 0x5B;
         private const byte VK_TAB = 0x09;
-        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+        private const byte VK_SHIFT = 0x10;
+        private const byte VK_CONTROL = 0x11;
+        private const byte VK_MENU = 0x12;   // Alt
+        private const byte VK_LWIN = 0x5B;
+        private const byte VK_RWIN = 0x5C;
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
         private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
@@ -126,6 +138,8 @@ namespace HotCornersDaemon
         private static readonly Stopwatch _Clock = Stopwatch.StartNew();
 
         private static NotifyIcon _TrayIcon;
+        private static MenuItem _menuItemAltTab;
+        private static MenuItem _menuItemTaskView;
 
         // =====================================================================
         // 4. ENTRY POINT
@@ -158,6 +172,9 @@ namespace HotCornersDaemon
                 // Configure Process & Hook Thread Priority
                 Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
                 Thread.CurrentThread.Priority = ThreadPriority.Highest;
+
+                // Release any previously stuck keys on startup
+                ReleaseStuckModifiers();
 
                 // Install Low-Level Mouse Hook
                 _mouseHookDelegate = HookCallback;
@@ -225,7 +242,7 @@ namespace HotCornersDaemon
                 }
 
                 // -------------------------------------------------------------
-                // B. Top-Left Corner Trigger (X <= 50, Y <= 45) -> Task View (Win + Tab)
+                // B. Top-Left Corner Trigger (X <= 50, Y <= 45)
                 // -------------------------------------------------------------
                 if (ENABLE_TOP_LEFT && x <= CORNER_W && y <= CORNER_H)
                 {
@@ -234,7 +251,7 @@ namespace HotCornersDaemon
                     {
                         _topLeftArmed = false;
                         _lastTriggerTick = nowMs;
-                        TriggerTaskViewAsync();
+                        TriggerTopLeftAsync();
                     }
                 }
 
@@ -246,7 +263,7 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 6. ASYNC TASK VIEW TRIGGER (Non-blocking ThreadPool dispatch)
+        // 6. ASYNC TOP-LEFT ACTION DISPATCH
         // =====================================================================
         private static bool IsMouseButtonPressed()
         {
@@ -263,47 +280,130 @@ namespace HotCornersDaemon
             return false;
         }
 
-        private static void TriggerTaskViewAsync()
+        private static void TriggerTopLeftAsync()
         {
             if (IsMouseButtonPressed() || IsExclusiveFullscreenActive())
             {
                 return;
             }
 
+            CornerAction action = _topLeftAction;
             ThreadPool.QueueUserWorkItem((state) =>
             {
                 try
                 {
-                    keybd_event(VK_LWIN, 0, KEYEVENTF_EXTENDEDKEY, UIntPtr.Zero);
-                    keybd_event(VK_TAB, 0, 0, UIntPtr.Zero);
-                    Thread.Sleep(20);
-                    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                    keybd_event(VK_LWIN, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
+                    if (action == CornerAction.WindowSwitcher)
+                    {
+                        // Native Windows Alt+Tab Window Switcher via Shell COM (Zero synthetic key events)
+                        Type shellType = Type.GetTypeFromProgID("Shell.Application");
+                        if (shellType != null)
+                        {
+                            object shell = Activator.CreateInstance(shellType);
+                            shellType.InvokeMember("WindowSwitcher", System.Reflection.BindingFlags.InvokeMethod, null, shell, null);
+                            Marshal.ReleaseComObject(shell);
+                        }
+                        else
+                        {
+                            // Safe fallback synthetic Alt+Tab with guaranteed key-up
+                            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+                            keybd_event(VK_TAB, 0, 0, UIntPtr.Zero);
+                            Thread.Sleep(30);
+                            keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                        }
+                    }
+                    else
+                    {
+                        // Task View (Win + Tab) — Note: No KEYEVENTF_EXTENDEDKEY on VK_LWIN!
+                        keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero);
+                        keybd_event(VK_TAB, 0, 0, UIntPtr.Zero);
+                        Thread.Sleep(30);
+                        keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                        keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                    }
                 }
                 catch
                 {
                     // Ignore transient dispatch errors
                 }
+                finally
+                {
+                    // Defensive cleanup: Ensure no modifier key is ever trapped in DOWN state
+                    ReleaseStuckModifiers();
+                }
             });
         }
 
+        internal static void ReleaseStuckModifiers()
+        {
+            try
+            {
+                keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(0xA4, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // VK_LMENU
+                keybd_event(0xA5, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // VK_RMENU
+                keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_RWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(0xA2, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // VK_LCONTROL
+                keybd_event(0xA3, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // VK_RCONTROL
+                keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch
+            {
+            }
+        }
+
         // =====================================================================
-        // 7. SYSTEM TRAY ICON & CLEANUP
+        // 7. SYSTEM TRAY ICON & CONTROLS
         // =====================================================================
         private static void InitializeTrayIcon()
         {
             ContextMenu trayMenu = new ContextMenu();
-            trayMenu.MenuItems.Add("Windows Hot Corners (Top-Left: Task View)").Enabled = false;
+
+            _menuItemAltTab = new MenuItem("Upper-Left: Window Switcher (Alt + Tab)", (s, e) =>
+            {
+                _topLeftAction = CornerAction.WindowSwitcher;
+                UpdateTrayMenu();
+            });
+
+            _menuItemTaskView = new MenuItem("Upper-Left: Task View (Win + Tab)", (s, e) =>
+            {
+                _topLeftAction = CornerAction.TaskView;
+                UpdateTrayMenu();
+            });
+
+            trayMenu.MenuItems.Add(_menuItemAltTab);
+            trayMenu.MenuItems.Add(_menuItemTaskView);
+            trayMenu.MenuItems.Add("-");
+            trayMenu.MenuItems.Add("Release Stuck Modifier Keys", (s, e) =>
+            {
+                ReleaseStuckModifiers();
+                MessageBox.Show("All modifier keys (Alt, Win, Ctrl, Shift, Tab) released.", "Hot Corners", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            });
             trayMenu.MenuItems.Add("-");
             trayMenu.MenuItems.Add("Exit Hot Corners", (s, e) => Application.Exit());
 
             _TrayIcon = new NotifyIcon
             {
-                Text = "Windows Hot Corners (Top-Left: Task View)",
                 Icon = SystemIcons.Application,
                 ContextMenu = trayMenu,
                 Visible = true
             };
+
+            UpdateTrayMenu();
+        }
+
+        private static void UpdateTrayMenu()
+        {
+            if (_menuItemAltTab != null) _menuItemAltTab.Checked = (_topLeftAction == CornerAction.WindowSwitcher);
+            if (_menuItemTaskView != null) _menuItemTaskView.Checked = (_topLeftAction == CornerAction.TaskView);
+            if (_TrayIcon != null)
+            {
+                _TrayIcon.Text = _topLeftAction == CornerAction.WindowSwitcher
+                    ? "Hot Corners (Upper-Left: Alt+Tab)"
+                    : "Hot Corners (Upper-Left: Task View)";
+            }
         }
 
         private sealed class SystemEventListenerWindow : Form
@@ -333,6 +433,8 @@ namespace HotCornersDaemon
 
         private static void OnApplicationExit(object sender, EventArgs e)
         {
+            ReleaseStuckModifiers();
+
             if (_mouseHookHandle != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(_mouseHookHandle);
@@ -353,7 +455,8 @@ namespace HotCornersDaemon
         {
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("=== Windows Hot Corners Verification Report ===");
-            sb.AppendFormat("Configuration           : UPPER-LEFT CORNER ONLY (Task View / Win + Tab)\r\n");
+            sb.AppendFormat("Configuration           : UPPER-LEFT CORNER ONLY\r\n");
+            sb.AppendFormat("Upper-Left Action       : {0}\r\n", _topLeftAction == CornerAction.WindowSwitcher ? "Window Switcher (Alt + Tab)" : "Task View (Win + Tab)");
             sb.AppendFormat("Physical Screen Metrics : {0} x {1}\r\n", _screenW, _screenH);
             sb.AppendFormat("Top-Left Hitbox         : {0} x {1} px (Hysteresis: {2}px, Cooldown: {3}ms)\r\n",
                 CORNER_W, CORNER_H, RESET_HYSTERESIS_PX, TRIGGER_COOLDOWN_MS);

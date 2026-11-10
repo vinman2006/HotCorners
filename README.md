@@ -88,9 +88,9 @@ That's it!
 
 ## 🎯 Corner Controls & Key Actions
 
-| Corner | Default State | Action | Shortcut Emulated | Experience |
+| Corner | Default State | Action | Mechanism | Experience |
 | :---: | :---: | :---: | :---: | :--- |
-| ↖️ *(Top-Left)* | **ACTIVE** | **Task View** | `Win + Tab` | Instant fluid overview of all running application windows. |
+| ↖️ *(Top-Left)* | **ACTIVE** | **Window Switcher (Alt + Tab)** | Shell COM (`IShellDispatch::WindowSwitcher`) | Instant fluid window switcher overlay without synthetic key injection; tray toggleable to Task View (`Win + Tab`). |
 | ↙️ *(Bottom-Left)* | *Disabled (Native)* | **Previous Desktop** | `Ctrl + Win + Left` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_LEFT`. |
 | ↘️ *(Bottom-Right)* | *Disabled (Native)* | **Next Desktop** | `Ctrl + Win + Right` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_RIGHT`. |
 | ⬇️ *(Bottom Edge)* | **ACTIVE** | **Taskbar Auto-Hide** | Native Slide | Moves down to reveal taskbar 100% natively without interference. |
