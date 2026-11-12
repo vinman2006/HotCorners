@@ -96,6 +96,14 @@ That's it!
 | ↘️ *(Bottom-Right)* | *Disabled (Native)* | **Next Desktop** | `Ctrl + Win + Right` | Stock native Windows behavior by default; toggleable via `ENABLE_BOTTOM_RIGHT`. |
 | ⬇️ *(Bottom Edge)* | **ACTIVE** | **Taskbar Auto-Hide** | Native Slide | Moves down to reveal taskbar 100% natively without interference. |
 
+### ⌨️ Independent On/Off Keyboard Shortcuts (Tray Menu)
+
+| Key | Default | Action | Experience |
+| :---: | :---: | :--- | :--- |
+| **`F1`** | **ON** | **`Alt + Tab` (Switch & Release)** | Instant 1-tap window switch to previous app without leaving `Alt` held down. |
+| **`F9` / `F10`** | **ON** | **`Ctrl + Win + Left / Right`** | Instant previous / next virtual desktop switch on bare press (modified chords pass through). |
+| **`Vol Up` / `Vol Down`** | *OFF* | **`Right` / `Left` Arrow** | Maps hardware volume keys to arrow keys for hands-free reading/slides; 1-click toggle in tray. |
+
 ---
 
 ## 🏗️ Technical Architecture

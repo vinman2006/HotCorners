@@ -1,16 +1,16 @@
 /*
- * HotCorners.cs — Native Win32 Hot Corners Daemon for Windows 11 & 10
+ * HotCorners.cs — Native Win32 Hot Corners & Ergonomic Shortcuts Daemon for Windows 11 & 10
  * Configuration:
- *   1. Upper-Left Corner -> Windows Task View (Win + Tab) via Shell.Application COM (0 keystrokes).
- *      (Switchable via System Tray to Alt+Tab Window Switcher popup.)
- *   2. GNOME / Linux-Style Scroll-to-Switch-Desktops inside Task View:
- *      While Task View (Win + Tab) is open (whether opened via Upper-Left corner or keyboard Win+Tab),
- *      scrolling Mouse Wheel Up/Down or Touchpad 2-finger Up/Down/Left/Right switches Virtual Desktops
- *      seamlessly while keeping the Task View interface open!
- *   3. Zero-CPU SetWinEventHook Self-Healing Guard for Windows 11 'Task Switching' (Alt+Tab) Popup:
- *      Automatically prevents Explorer's Alt+Tab XamlExplorerHostIslandWindow from getting trapped in
- *      SW_SHOWMINIMIZED (159x27) across virtual desktop transitions.
- *   4. Bottom corners & bottom edge remain 100% untouched stock Windows native behavior.
+ *   1. Upper-Left Corner (Strict 0..4px Touch) -> Windows Task View (Win + Tab) [On/Off & Mode Toggleable].
+ *   2. GNOME / Linux-Style Scroll-to-Switch-Desktops inside Task View [On/Off Toggleable]:
+ *      While Task View (Win + Tab) is open, Mouse Wheel / Precision Touchpad scroll switches Virtual Desktops
+ *      seamlessly while keeping Task View visible.
+ *   3. Independent Keyboard Shortcuts (Each individually On/Off toggleable & persisted in HKCU):
+ *        - F1 -> Alt + Tab (atomic press & release quick switch)
+ *        - F9 / F10 -> Virtual Desktop Left / Right (Ctrl + Win + Left / Right)
+ *        - Volume Up / Down -> Right / Left Arrow
+ *   4. Zero-CPU SetWinEventHook Self-Healing Guard for Windows 11 'Task Switching' (Alt+Tab) Popup.
+ *   5. Bottom corners & bottom edge remain 100% untouched stock Windows native behavior.
  *
  * Compilation (.NET Framework 4.8 Built-in Compiler):
  *   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /win32icon:HotCorners.ico /out:HotCorners.exe HotCorners.cs
@@ -36,14 +36,23 @@ namespace HotCornersDaemon
     internal static class Program
     {
         // =====================================================================
-        // 1. CONFIGURATION: UPPER-LEFT (WIN+TAB) + TASK VIEW DESKTOP SCROLLING
+        // 1. CONFIGURATION & DEFAULTS (Persisted in HKCU\Software\WindowsHotCorners)
         // =====================================================================
         private const string REG_KEY_PATH = @"Software\WindowsHotCorners";
         private const string REG_VAL_ACTION = "TopLeftMode";
+        private const string REG_VAL_TOPLEFT_ON = "TopLeftEnabled";
+        private const string REG_VAL_SCROLL_ON = "TaskViewScrollEnabled";
+        private const string REG_VAL_F1_ALTTAB = "ShortcutF1AltTab";
+        private const string REG_VAL_F9F10_VD = "ShortcutF9F10Desktop";
+        private const string REG_VAL_VOL_ARROWS = "ShortcutVolArrows";
 
         private static CornerAction _topLeftAction = CornerAction.TaskView;
-        private const bool ENABLE_TOP_LEFT = true;             // Active
-        private const bool ENABLE_TASKVIEW_SCROLL = true;      // Scroll inside Task View switches virtual desktops
+        private static bool _enableTopLeft = true;
+        private static bool _enableTaskViewScroll = true;
+        private static bool _enableF1AltTab = true;
+        private static bool _enableF9F10Desktop = true;
+        private static bool _enableVolArrows = false;
+
         private const bool ENABLE_BOTTOM_LEFT = false;         // Disabled (Stock native Windows)
         private const bool ENABLE_BOTTOM_RIGHT = false;        // Disabled (Stock native Windows)
 
@@ -59,13 +68,22 @@ namespace HotCornersDaemon
         // =====================================================================
         // 2. WIN32 API DECLARATIONS
         // =====================================================================
+        private const int WH_KEYBOARD_LL = 13;
         private const int WH_MOUSE_LL = 14;
+
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_SYSKEYUP = 0x0105;
+
         private const int WM_MOUSEMOVE = 0x0200;
         private const int WM_MOUSEWHEEL = 0x020A;
         private const int WM_MOUSEHWHEEL = 0x020E;
         private const int WM_DISPLAYCHANGE = 0x007E;
         private const int WM_SETTINGCHANGE = 0x001A;
+
         private const uint LLMHF_INJECTED = 0x00000001;
+        private const uint LLKHF_INJECTED = 0x00000010;
 
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
@@ -78,10 +96,17 @@ namespace HotCornersDaemon
         private const ushort VK_RIGHT = 0x27;
         private const ushort VK_LWIN = 0x5B;
         private const ushort VK_RWIN = 0x5C;
+        private const ushort VK_F1 = 0x70;
+        private const ushort VK_F9 = 0x78;
+        private const ushort VK_F10 = 0x79;
+        private const ushort VK_LSHIFT = 0xA0;
+        private const ushort VK_RSHIFT = 0xA1;
         private const ushort VK_LCONTROL = 0xA2;
         private const ushort VK_RCONTROL = 0xA3;
         private const ushort VK_LMENU = 0xA4;
         private const ushort VK_RMENU = 0xA5;
+        private const ushort VK_VOLUME_DOWN = 0xAE;
+        private const ushort VK_VOLUME_UP = 0xAF;
 
         private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const uint KEYEVENTF_KEYUP = 0x0002;
@@ -98,7 +123,7 @@ namespace HotCornersDaemon
         private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
         private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
-        private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private delegate IntPtr LowLevelHookProc(int nCode, IntPtr wParam, IntPtr lParam);
         private delegate void WinEventDelegate(
             IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 
@@ -134,6 +159,16 @@ namespace HotCornersDaemon
         {
             public POINT pt;
             public uint mouseData;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KBDLLHOOKSTRUCT
+        {
+            public uint vkCode;
+            public uint scanCode;
             public uint flags;
             public uint time;
             public IntPtr dwExtraInfo;
@@ -190,7 +225,7 @@ namespace HotCornersDaemon
         private static extern bool SetProcessDPIAware();
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelHookProc lpfn, IntPtr hMod, uint dwThreadId);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -269,7 +304,10 @@ namespace HotCornersDaemon
         // 3. DAEMON STATE
         // =====================================================================
         private static IntPtr _mouseHookHandle = IntPtr.Zero;
-        private static LowLevelMouseProc _mouseHookDelegate;
+        private static LowLevelHookProc _mouseHookDelegate;
+
+        private static IntPtr _keyboardHookHandle = IntPtr.Zero;
+        private static LowLevelHookProc _keyboardHookDelegate;
 
         private static IntPtr _minimizeHook = IntPtr.Zero;
         private static IntPtr _foregroundHook = IntPtr.Zero;
@@ -285,22 +323,31 @@ namespace HotCornersDaemon
         private static long _lastWheelTick = 0;
         private static long _lastScrollSwitchTick = 0;
 
+        private static bool _f1Down = false;
+        private static bool _f9Down = false;
+        private static bool _f10Down = false;
+
         private static readonly Stopwatch _Clock = Stopwatch.StartNew();
 
         private static NotifyIcon _TrayIcon;
         private static IntPtr _customTrayIconHandle = IntPtr.Zero;
-        private static MenuItem _menuItemTaskView;
-        private static MenuItem _menuItemAltTab;
+        private static MenuItem _menuTopLeftEnabled;
+        private static MenuItem _menuTaskView;
+        private static MenuItem _menuAltTabPopup;
+        private static MenuItem _menuScrollDesktops;
+        private static MenuItem _menuF1AltTab;
+        private static MenuItem _menuF9F10Desktop;
+        private static MenuItem _menuVolArrows;
 
         // =====================================================================
-        // 4. ENTRY POINT
+        // 4. ENTRY POINT & PERSISTENCE
         // =====================================================================
         [STAThread]
         private static void Main(string[] args)
         {
             EnablePhysicalDpiAwareness();
             UpdateScreenMetrics();
-            LoadActionPreference();
+            LoadPreferences();
 
             if (args != null && args.Length > 0 &&
                 (string.Equals(args[0], "--verify", StringComparison.OrdinalIgnoreCase) ||
@@ -328,13 +375,18 @@ namespace HotCornersDaemon
                 ReleaseStuckModifiers();
                 RepairTaskSwitchingIfMinimized(false);
 
-                // Install Low-Level Mouse Hook (Corner Flick + Task View Scroll Switcher)
-                _mouseHookDelegate = HookCallback;
+                // Install Low-Level Mouse Hook (Corner Touch + Task View Scroll Switcher)
+                _mouseHookDelegate = MouseHookCallback;
+                _keyboardHookDelegate = KeyboardHookCallback;
                 using (Process curProcess = Process.GetCurrentProcess())
                 using (ProcessModule curModule = curProcess.MainModule)
                 {
-                    _mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, _mouseHookDelegate, GetModuleHandle(curModule.ModuleName), 0);
+                    IntPtr hMod = GetModuleHandle(curModule.ModuleName);
+                    _mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, _mouseHookDelegate, hMod, 0);
                 }
+
+                // Install Keyboard Hook if any keyboard shortcut toggle is active
+                SyncKeyboardHook();
 
                 // Install Zero-CPU WinEvent guard for Windows 11 'Task Switching' SW_SHOWMINIMIZED bug
                 _winEventDelegate = OnWinEvent;
@@ -371,23 +423,47 @@ namespace HotCornersDaemon
             _screenH = GetSystemMetrics(SM_CYSCREEN);
         }
 
-        private static void LoadActionPreference()
+        private static bool ReadBoolPref(RegistryKey key, string name, bool defaultVal)
+        {
+            object val = key.GetValue(name);
+            return (val is int) ? ((int)val != 0) : defaultVal;
+        }
+
+        private static void LoadPreferences()
         {
             try
             {
                 using (RegistryKey key = Registry.CurrentUser.OpenSubKey(REG_KEY_PATH))
                 {
+                    if (key == null) return;
+
+                    object actionVal = key.GetValue(REG_VAL_ACTION);
+                    if (actionVal is int && Enum.IsDefined(typeof(CornerAction), (int)actionVal))
+                    {
+                        _topLeftAction = (CornerAction)(int)actionVal;
+                    }
+
+                    _enableTopLeft = ReadBoolPref(key, REG_VAL_TOPLEFT_ON, true);
+                    _enableTaskViewScroll = ReadBoolPref(key, REG_VAL_SCROLL_ON, true);
+                    _enableF1AltTab = ReadBoolPref(key, REG_VAL_F1_ALTTAB, true);
+                    _enableF9F10Desktop = ReadBoolPref(key, REG_VAL_F9F10_VD, true);
+                    _enableVolArrows = ReadBoolPref(key, REG_VAL_VOL_ARROWS, false);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void SaveIntPref(string name, int value)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(REG_KEY_PATH))
+                {
                     if (key != null)
                     {
-                        object val = key.GetValue(REG_VAL_ACTION);
-                        if (val is int)
-                        {
-                            int intVal = (int)val;
-                            if (Enum.IsDefined(typeof(CornerAction), intVal))
-                            {
-                                _topLeftAction = (CornerAction)intVal;
-                            }
-                        }
+                        key.SetValue(name, value, RegistryValueKind.DWord);
                     }
                 }
             }
@@ -396,20 +472,25 @@ namespace HotCornersDaemon
             }
         }
 
-        private static void SaveActionPreference()
+        private static void SyncKeyboardHook()
         {
-            try
+            bool needHook = _enableF1AltTab || _enableF9F10Desktop || _enableVolArrows;
+            if (needHook && _keyboardHookHandle == IntPtr.Zero)
             {
-                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(REG_KEY_PATH))
+                using (Process curProcess = Process.GetCurrentProcess())
+                using (ProcessModule curModule = curProcess.MainModule)
                 {
-                    if (key != null)
-                    {
-                        key.SetValue(REG_VAL_ACTION, (int)_topLeftAction, RegistryValueKind.DWord);
-                    }
+                    _keyboardHookHandle = SetWindowsHookEx(
+                        WH_KEYBOARD_LL, _keyboardHookDelegate, GetModuleHandle(curModule.ModuleName), 0);
                 }
             }
-            catch
+            else if (!needHook && _keyboardHookHandle != IntPtr.Zero)
             {
+                UnhookWindowsHookEx(_keyboardHookHandle);
+                _keyboardHookHandle = IntPtr.Zero;
+                _f1Down = false;
+                _f9Down = false;
+                _f10Down = false;
             }
         }
 
@@ -488,15 +569,15 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 6. LOW-LEVEL MOUSE HOOK (< 0.001ms Latency, Top-Left + Task View Scroll)
+        // 6. LOW-LEVEL MOUSE HOOK (Strict Corner Touch + Task View Scroll)
         // =====================================================================
-        private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        private static IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0)
             {
                 int msg = wParam.ToInt32();
 
-                if (msg == WM_MOUSEMOVE)
+                if (msg == WM_MOUSEMOVE && _enableTopLeft)
                 {
                     MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
 
@@ -511,14 +592,13 @@ namespace HotCornersDaemon
                     int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
                     int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
 
-                    // A. Re-Arming Hysteresis Check (must travel 80px out of top-left)
                     if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
                     {
                         _topLeftArmed = true;
                     }
 
-                    // B. Strict Corner-Touch Trigger (X <= 4, Y <= 4) -> Opens Task View (Win+Tab)
-                    if (ENABLE_TOP_LEFT && x <= CORNER_W && y <= CORNER_H)
+                    // Strict Corner-Touch Trigger (X <= 4, Y <= 4)
+                    if (x <= CORNER_W && y <= CORNER_H)
                     {
                         long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
                         if (_topLeftArmed && (nowMs - _lastTriggerTick) >= TRIGGER_COOLDOWN_MS)
@@ -529,7 +609,7 @@ namespace HotCornersDaemon
                         }
                     }
                 }
-                else if (ENABLE_TASKVIEW_SCROLL && (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL))
+                else if (_enableTaskViewScroll && (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL))
                 {
                     MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                     if ((hookStruct.flags & LLMHF_INJECTED) == 0 && IsTaskViewOpen())
@@ -537,8 +617,6 @@ namespace HotCornersDaemon
                         short rawDelta = unchecked((short)((uint)hookStruct.mouseData >> 16));
                         if (rawDelta != 0)
                         {
-                            // Vertical wheel: Scroll Up (+delta) -> Left desktop (-), Scroll Down (-delta) -> Right desktop (+)
-                            // Horizontal wheel: Scroll Left (-delta) -> Left desktop (-), Scroll Right (+delta) -> Right desktop (+)
                             int stepDelta = (msg == WM_MOUSEWHEEL) ? -rawDelta : rawDelta;
                             long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
 
@@ -564,7 +642,6 @@ namespace HotCornersDaemon
                             }
                         }
 
-                        // Swallow wheel packets inside Task View so the window grid doesn't fight desktop switching
                         return (IntPtr)1;
                     }
                 }
@@ -574,11 +651,103 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 7. ASYNC ACTION & DESKTOP SWITCH DISPATCH
+        // 7. LOW-LEVEL KEYBOARD HOOK (F1->Alt+Tab, F9/F10->Desktop, Vol->Arrows)
+        // =====================================================================
+        private static bool IsKeyDown(ushort vk)
+        {
+            return (GetAsyncKeyState(vk) & 0x8000) != 0;
+        }
+
+        private static bool IsAnyModifierDown()
+        {
+            return IsKeyDown(VK_CONTROL) || IsKeyDown(VK_LCONTROL) || IsKeyDown(VK_RCONTROL) ||
+                   IsKeyDown(VK_MENU) || IsKeyDown(VK_LMENU) || IsKeyDown(VK_RMENU) ||
+                   IsKeyDown(VK_SHIFT) || IsKeyDown(VK_LSHIFT) || IsKeyDown(VK_RSHIFT) ||
+                   IsKeyDown(VK_LWIN) || IsKeyDown(VK_RWIN);
+        }
+
+        private static bool HandleTriggerOnceKey(bool isKeyDown, bool isKeyUp, ref bool isDownFlag, Action onTrigger)
+        {
+            if (isKeyDown)
+            {
+                if (!isDownFlag)
+                {
+                    if (IsAnyModifierDown()) return false;
+                    isDownFlag = true;
+                    onTrigger();
+                }
+                return true;
+            }
+            if (isKeyUp && isDownFlag)
+            {
+                isDownFlag = false;
+                return true;
+            }
+            return false;
+        }
+
+        private static IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                KBDLLHOOKSTRUCT kbd = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+                if ((kbd.flags & LLKHF_INJECTED) != 0)
+                {
+                    return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+                }
+
+                int msg = wParam.ToInt32();
+                bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+                bool isKeyUp = (msg == WM_KEYUP || msg == WM_SYSKEYUP);
+                uint vk = kbd.vkCode;
+
+                // 1. F1 -> Quick Alt+Tab + Release
+                if (_enableF1AltTab && vk == VK_F1)
+                {
+                    if (HandleTriggerOnceKey(isKeyDown, isKeyUp, ref _f1Down, TriggerQuickAltTabAsync))
+                    {
+                        return (IntPtr)1;
+                    }
+                }
+
+                // 2. F9 / F10 -> Previous / Next Virtual Desktop
+                if (_enableF9F10Desktop && vk == VK_F9)
+                {
+                    if (HandleTriggerOnceKey(isKeyDown, isKeyUp, ref _f9Down, () => SwitchVirtualDesktopAsync(false)))
+                    {
+                        return (IntPtr)1;
+                    }
+                }
+                if (_enableF9F10Desktop && vk == VK_F10)
+                {
+                    if (HandleTriggerOnceKey(isKeyDown, isKeyUp, ref _f10Down, () => SwitchVirtualDesktopAsync(true)))
+                    {
+                        return (IntPtr)1;
+                    }
+                }
+
+                // 3. Volume Down / Volume Up -> Left / Right Arrow (supports hold & repeat)
+                if (_enableVolArrows && (vk == VK_VOLUME_DOWN || vk == VK_VOLUME_UP))
+                {
+                    ushort targetArrow = (vk == VK_VOLUME_UP) ? VK_RIGHT : VK_LEFT;
+                    if (isKeyDown || isKeyUp)
+                    {
+                        INPUT[] inp = new INPUT[] { MakeKeyInput(targetArrow, isKeyDown, true) };
+                        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+                        return (IntPtr)1;
+                    }
+                }
+            }
+
+            return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+        }
+
+        // =====================================================================
+        // 8. ASYNC ACTION & DESKTOP SWITCH DISPATCH
         // =====================================================================
         private static bool IsMouseButtonPressed()
         {
-            return (GetAsyncKeyState(0x01) & 0x8000) != 0 || (GetAsyncKeyState(0x02) & 0x8000) != 0;
+            return IsKeyDown(0x01) || IsKeyDown(0x02);
         }
 
         private static bool IsExclusiveFullscreenActive()
@@ -609,6 +778,28 @@ namespace HotCornersDaemon
                     }
                 }
             };
+        }
+
+        private static void TriggerQuickAltTabAsync()
+        {
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    INPUT[] seq = new INPUT[]
+                    {
+                        MakeKeyInput(VK_LMENU, true, false),
+                        MakeKeyInput(VK_TAB, true, false),
+                        MakeKeyInput(VK_TAB, false, false),
+                        MakeKeyInput(VK_LMENU, false, false)
+                    };
+                    SendInput((uint)seq.Length, seq, Marshal.SizeOf(typeof(INPUT)));
+                }
+                catch
+                {
+                    ReleaseStuckModifiers();
+                }
+            });
         }
 
         private static void SwitchVirtualDesktopAsync(bool goRight)
@@ -650,7 +841,6 @@ namespace HotCornersDaemon
                 {
                     if (action == CornerAction.TaskView)
                     {
-                        // Native Windows Task View (Win + Tab) via Shell.Application COM (0 synthetic keystrokes)
                         Type shellType = Type.GetTypeFromProgID("Shell.Application");
                         if (shellType != null)
                         {
@@ -707,6 +897,8 @@ namespace HotCornersDaemon
                     MakeKeyInput(VK_LCONTROL, false),
                     MakeKeyInput(VK_RCONTROL, false),
                     MakeKeyInput(VK_SHIFT, false),
+                    MakeKeyInput(VK_LSHIFT, false),
+                    MakeKeyInput(VK_RSHIFT, false),
                     MakeKeyInput(VK_TAB, false)
                 };
                 SendInput((uint)upSeq.Length, upSeq, Marshal.SizeOf(typeof(INPUT)));
@@ -717,30 +909,80 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 8. SYSTEM TRAY ICON & CONTROLS
+        // 9. SYSTEM TRAY ICON & INDEPENDENT ON/OFF MENU CONTROLS
         // =====================================================================
         private static void InitializeTrayIcon()
         {
             ContextMenu trayMenu = new ContextMenu();
 
-            _menuItemTaskView = new MenuItem("Upper-Left: Task View (Win + Tab) + Scroll Desktops", (s, e) =>
+            // Section 1: Hot Corners & Scroll Switching
+            _menuTopLeftEnabled = new MenuItem("Hot Corner: Upper-Left Enabled", (s, e) =>
+            {
+                _enableTopLeft = !_enableTopLeft;
+                SaveIntPref(REG_VAL_TOPLEFT_ON, _enableTopLeft ? 1 : 0);
+                UpdateTrayMenu();
+            });
+
+            _menuTaskView = new MenuItem("   Upper-Left: Task View (Win + Tab) + Scroll Desktops", (s, e) =>
             {
                 _topLeftAction = CornerAction.TaskView;
-                SaveActionPreference();
+                _enableTopLeft = true;
+                SaveIntPref(REG_VAL_ACTION, (int)_topLeftAction);
+                SaveIntPref(REG_VAL_TOPLEFT_ON, 1);
                 UpdateTrayMenu();
             });
 
-            _menuItemAltTab = new MenuItem("Upper-Left: Window Switcher (Alt + Tab Popup)", (s, e) =>
+            _menuAltTabPopup = new MenuItem("   Upper-Left: Window Switcher (Alt + Tab Popup)", (s, e) =>
             {
                 _topLeftAction = CornerAction.WindowSwitcher;
-                SaveActionPreference();
+                _enableTopLeft = true;
+                SaveIntPref(REG_VAL_ACTION, (int)_topLeftAction);
+                SaveIntPref(REG_VAL_TOPLEFT_ON, 1);
                 UpdateTrayMenu();
             });
 
-            trayMenu.MenuItems.Add(_menuItemTaskView);
-            trayMenu.MenuItems.Add(_menuItemAltTab);
+            _menuScrollDesktops = new MenuItem("Task View: Scroll Wheel Switches Desktops", (s, e) =>
+            {
+                _enableTaskViewScroll = !_enableTaskViewScroll;
+                SaveIntPref(REG_VAL_SCROLL_ON, _enableTaskViewScroll ? 1 : 0);
+                UpdateTrayMenu();
+            });
+
+            // Section 2: Separate Independent Keyboard Shortcuts (On/Off)
+            _menuF1AltTab = new MenuItem("Shortcut: F1 -> Alt + Tab (Switch && Release)", (s, e) =>
+            {
+                _enableF1AltTab = !_enableF1AltTab;
+                SaveIntPref(REG_VAL_F1_ALTTAB, _enableF1AltTab ? 1 : 0);
+                SyncKeyboardHook();
+                UpdateTrayMenu();
+            });
+
+            _menuF9F10Desktop = new MenuItem("Shortcut: F9 / F10 -> Switch Desktop (Left / Right)", (s, e) =>
+            {
+                _enableF9F10Desktop = !_enableF9F10Desktop;
+                SaveIntPref(REG_VAL_F9F10_VD, _enableF9F10Desktop ? 1 : 0);
+                SyncKeyboardHook();
+                UpdateTrayMenu();
+            });
+
+            _menuVolArrows = new MenuItem("Shortcut: Volume Up / Down -> Right / Left Arrow", (s, e) =>
+            {
+                _enableVolArrows = !_enableVolArrows;
+                SaveIntPref(REG_VAL_VOL_ARROWS, _enableVolArrows ? 1 : 0);
+                SyncKeyboardHook();
+                UpdateTrayMenu();
+            });
+
+            trayMenu.MenuItems.Add(_menuTopLeftEnabled);
+            trayMenu.MenuItems.Add(_menuTaskView);
+            trayMenu.MenuItems.Add(_menuAltTabPopup);
+            trayMenu.MenuItems.Add(_menuScrollDesktops);
             trayMenu.MenuItems.Add("-");
-            trayMenu.MenuItems.Add("Repair Alt+Tab Popup & Release Stuck Keys", (s, e) =>
+            trayMenu.MenuItems.Add(_menuF1AltTab);
+            trayMenu.MenuItems.Add(_menuF9F10Desktop);
+            trayMenu.MenuItems.Add(_menuVolArrows);
+            trayMenu.MenuItems.Add("-");
+            trayMenu.MenuItems.Add("Repair Alt+Tab Popup && Release Stuck Keys", (s, e) =>
             {
                 ReleaseStuckModifiers();
                 RepairTaskSwitchingIfMinimized(false);
@@ -787,13 +1029,34 @@ namespace HotCornersDaemon
 
         private static void UpdateTrayMenu()
         {
-            if (_menuItemTaskView != null) _menuItemTaskView.Checked = (_topLeftAction == CornerAction.TaskView);
-            if (_menuItemAltTab != null) _menuItemAltTab.Checked = (_topLeftAction == CornerAction.WindowSwitcher);
+            if (_menuTopLeftEnabled != null) _menuTopLeftEnabled.Checked = _enableTopLeft;
+            if (_menuTaskView != null)
+            {
+                _menuTaskView.Enabled = _enableTopLeft;
+                _menuTaskView.Checked = _enableTopLeft && (_topLeftAction == CornerAction.TaskView);
+            }
+            if (_menuAltTabPopup != null)
+            {
+                _menuAltTabPopup.Enabled = _enableTopLeft;
+                _menuAltTabPopup.Checked = _enableTopLeft && (_topLeftAction == CornerAction.WindowSwitcher);
+            }
+            if (_menuScrollDesktops != null) _menuScrollDesktops.Checked = _enableTaskViewScroll;
+            if (_menuF1AltTab != null) _menuF1AltTab.Checked = _enableF1AltTab;
+            if (_menuF9F10Desktop != null) _menuF9F10Desktop.Checked = _enableF9F10Desktop;
+            if (_menuVolArrows != null) _menuVolArrows.Checked = _enableVolArrows;
+
             if (_TrayIcon != null)
             {
-                _TrayIcon.Text = _topLeftAction == CornerAction.TaskView
-                    ? "Hot Corners (Top-Left: Task View + Scroll Desktops)"
-                    : "Hot Corners (Top-Left: Alt+Tab Switcher)";
+                if (!_enableTopLeft)
+                {
+                    _TrayIcon.Text = "Hot Corners (Corner Off | Shortcuts Active)";
+                }
+                else
+                {
+                    _TrayIcon.Text = _topLeftAction == CornerAction.TaskView
+                        ? "Hot Corners (Top-Left: Task View + Scroll)"
+                        : "Hot Corners (Top-Left: Alt+Tab Switcher)";
+                }
             }
         }
 
@@ -837,6 +1100,11 @@ namespace HotCornersDaemon
                 UnhookWinEvent(_foregroundHook);
                 _foregroundHook = IntPtr.Zero;
             }
+            if (_keyboardHookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_keyboardHookHandle);
+                _keyboardHookHandle = IntPtr.Zero;
+            }
             if (_mouseHookHandle != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(_mouseHookHandle);
@@ -857,17 +1125,19 @@ namespace HotCornersDaemon
         }
 
         // =====================================================================
-        // 9. BUILT-IN DIAGNOSTICS (HotCorners.exe --verify)
+        // 10. BUILT-IN DIAGNOSTICS (HotCorners.exe --verify)
         // =====================================================================
         private static void RunVerificationDiagnostics()
         {
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("=== Windows Hot Corners Verification Report ===");
-            sb.AppendFormat("Configuration           : UPPER-LEFT (Task View) + Scroll Desktop Switcher\r\n");
-            sb.AppendFormat("Upper-Left Action       : {0}\r\n",
-                _topLeftAction == CornerAction.TaskView ? "Task View (Win + Tab / Shell COM)" : "Window Switcher (Ctrl+Alt+Tab Popup)");
-            sb.AppendFormat("Task View Scroll Switch : {0} (Wheel Up/Left -> Prev Desktop, Down/Right -> Next Desktop)\r\n",
-                ENABLE_TASKVIEW_SCROLL ? "ENABLED" : "DISABLED");
+            sb.AppendFormat("Upper-Left Hot Corner   : {0} ({1})\r\n",
+                _enableTopLeft ? "ON" : "OFF",
+                _topLeftAction == CornerAction.TaskView ? "Task View / Win+Tab" : "Window Switcher / Ctrl+Alt+Tab");
+            sb.AppendFormat("Task View Scroll Switch : {0}\r\n", _enableTaskViewScroll ? "ON" : "OFF");
+            sb.AppendFormat("Shortcut F1 -> Alt+Tab  : {0}\r\n", _enableF1AltTab ? "ON" : "OFF");
+            sb.AppendFormat("Shortcut F9/F10 -> Desk : {0}\r\n", _enableF9F10Desktop ? "ON" : "OFF");
+            sb.AppendFormat("Shortcut Vol -> Arrows  : {0}\r\n", _enableVolArrows ? "ON" : "OFF");
             sb.AppendFormat("Physical Screen Metrics : {0} x {1}\r\n", _screenW, _screenH);
             sb.AppendFormat("Top-Left Hitbox         : {0} x {1} px (Hysteresis: {2}px, Cooldown: {3}ms)\r\n",
                 CORNER_W, CORNER_H, RESET_HYSTERESIS_PX, TRIGGER_COOLDOWN_MS);
