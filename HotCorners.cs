@@ -13,7 +13,7 @@
  *   4. Bottom corners & bottom edge remain 100% untouched stock Windows native behavior.
  *
  * Compilation (.NET Framework 4.8 Built-in Compiler):
- *   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:HotCorners.exe HotCorners.cs
+ *   C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /win32icon:HotCorners.ico /out:HotCorners.exe HotCorners.cs
  */
 
 using System;
@@ -47,9 +47,9 @@ namespace HotCornersDaemon
         private const bool ENABLE_BOTTOM_LEFT = false;         // Disabled (Stock native Windows)
         private const bool ENABLE_BOTTOM_RIGHT = false;        // Disabled (Stock native Windows)
 
-        private const int CORNER_W = 50;                       // Top-left trigger hitbox width (px)
-        private const int CORNER_H = 45;                       // Top-left trigger hitbox height (px)
-        private const int RESET_HYSTERESIS_PX = 75;            // Distance out of corner to re-arm (px)
+        private const int CORNER_W = 4;                        // Strict corner-touch hitbox width (0..4 px)
+        private const int CORNER_H = 4;                        // Strict corner-touch hitbox height (0..4 px)
+        private const int RESET_HYSTERESIS_PX = 80;            // Distance out of corner to re-arm (px)
         private const long TRIGGER_COOLDOWN_MS = 400;          // Cooldown between consecutive corner toggles (ms)
 
         private const int WHEEL_THRESHOLD = 120;               // 1 standard wheel notch (accumulates touchpad deltas)
@@ -258,6 +258,13 @@ namespace HotCornersDaemon
         [DllImport("shell32.dll")]
         private static extern int SHQueryUserNotificationState(out int pquns);
 
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        private static extern uint ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[] phiconLarge, IntPtr[] phiconSmall, uint nIcons);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
         // =====================================================================
         // 3. DAEMON STATE
         // =====================================================================
@@ -281,6 +288,7 @@ namespace HotCornersDaemon
         private static readonly Stopwatch _Clock = Stopwatch.StartNew();
 
         private static NotifyIcon _TrayIcon;
+        private static IntPtr _customTrayIconHandle = IntPtr.Zero;
         private static MenuItem _menuItemTaskView;
         private static MenuItem _menuItemAltTab;
 
@@ -503,13 +511,13 @@ namespace HotCornersDaemon
                     int x = rawX < 0 ? 0 : (rawX >= _screenW ? _screenW - 1 : rawX);
                     int y = rawY < 0 ? 0 : (rawY >= _screenH ? _screenH - 1 : rawY);
 
-                    // A. Re-Arming Hysteresis Check (must travel 75px out of top-left)
+                    // A. Re-Arming Hysteresis Check (must travel 80px out of top-left)
                     if (!_topLeftArmed && (x > CORNER_W + RESET_HYSTERESIS_PX || y > CORNER_H + RESET_HYSTERESIS_PX))
                     {
                         _topLeftArmed = true;
                     }
 
-                    // B. Top-Left Corner Trigger (X <= 50, Y <= 45) -> Opens Task View (Win+Tab)
+                    // B. Strict Corner-Touch Trigger (X <= 4, Y <= 4) -> Opens Task View (Win+Tab)
                     if (ENABLE_TOP_LEFT && x <= CORNER_W && y <= CORNER_H)
                     {
                         long nowMs = (_Clock.ElapsedTicks * 1000L) / Stopwatch.Frequency;
@@ -744,12 +752,37 @@ namespace HotCornersDaemon
 
             _TrayIcon = new NotifyIcon
             {
-                Icon = SystemIcons.Application,
+                Icon = LoadAppTrayIcon(),
                 ContextMenu = trayMenu,
                 Visible = true
             };
 
             UpdateTrayMenu();
+        }
+
+        private static Icon LoadAppTrayIcon()
+        {
+            try
+            {
+                string exePath = Application.ExecutablePath;
+                IntPtr[] smallIcons = new IntPtr[1];
+                uint count = ExtractIconEx(exePath, 0, null, smallIcons, 1);
+                if (count > 0 && smallIcons[0] != IntPtr.Zero)
+                {
+                    _customTrayIconHandle = smallIcons[0];
+                    return Icon.FromHandle(_customTrayIconHandle);
+                }
+
+                Icon assoc = Icon.ExtractAssociatedIcon(exePath);
+                if (assoc != null)
+                {
+                    return assoc;
+                }
+            }
+            catch
+            {
+            }
+            return SystemIcons.Application;
         }
 
         private static void UpdateTrayMenu()
@@ -814,6 +847,12 @@ namespace HotCornersDaemon
             {
                 _TrayIcon.Visible = false;
                 _TrayIcon.Dispose();
+            }
+
+            if (_customTrayIconHandle != IntPtr.Zero)
+            {
+                DestroyIcon(_customTrayIconHandle);
+                _customTrayIconHandle = IntPtr.Zero;
             }
         }
 

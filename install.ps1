@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Smart Hot Corners - 1-Click Installer for Windows 11 / 10
 .DESCRIPTION
@@ -46,9 +46,14 @@ if (Test-Path $sourceVD) {
 # Copy or Compile HotCorners.exe
 $sourceExe = Join-Path $sourceDir "HotCorners.exe"
 $sourceCS = Join-Path $sourceDir "HotCorners.cs"
+$sourceIco = Join-Path $sourceDir "HotCorners.ico"
+$targetIco = Join-Path $targetDir "HotCorners.ico"
 
 if (Test-Path $sourceCS) {
     Copy-Item $sourceCS $targetCS -Force
+}
+if (Test-Path $sourceIco) {
+    Copy-Item $sourceIco $targetIco -Force
 }
 
 if (Test-Path $sourceExe) {
@@ -60,7 +65,11 @@ if (Test-Path $sourceExe) {
     if (-not (Test-Path $csc)) {
         $csc = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
     }
-    & $csc /target:winexe /optimize+ /out:$targetExe $targetCS | Out-Null
+    if (Test-Path $sourceIco) {
+        & $csc /target:winexe /optimize+ "/win32icon:$sourceIco" /out:$targetExe $targetCS | Out-Null
+    } else {
+        & $csc /target:winexe /optimize+ /out:$targetExe $targetCS | Out-Null
+    }
     Write-Host "[+] Compiled and installed HotCorners.exe" -ForegroundColor Green
 } else {
     throw "Neither HotCorners.exe nor HotCorners.cs found in $sourceDir."

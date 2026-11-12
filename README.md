@@ -147,7 +147,7 @@ flowchart TD
 You can recompile [`HotCorners.cs`](HotCorners.cs) in under 2 seconds using the built-in Windows C# compiler—no SDK or Visual Studio required:
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /target:winexe /optimize+ /out:'HotCorners.exe' 'HotCorners.cs'
+& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /target:winexe /optimize+ /win32icon:'HotCorners.ico' /out:'HotCorners.exe' 'HotCorners.cs'
 ```
 
 ---
@@ -157,8 +157,8 @@ You can recompile [`HotCorners.cs`](HotCorners.cs) in under 2 seconds using the 
 Open [`HotCorners.cs`](HotCorners.cs) in any text editor to adjust behavior:
 
 ```csharp
-private const int CORNER_W = 60;             // Corner trigger width (px)
-private const int CORNER_H = 45;             // Corner trigger height (px)
+private const int CORNER_W = 4;              // Strict corner-touch trigger width (0..4 px)
+private const int CORNER_H = 4;              // Strict corner-touch trigger height (0..4 px)
 private const int CORNER_SHIELD_W = 260;     // Taskbar immunity shield wing width (px)
 private const int CORNER_SHIELD_H = 30;      // Bottom approach shield height (px)
 private const int RESET_HYSTERESIS_PX = 75;  // Distance out of corner to re-arm (px)
